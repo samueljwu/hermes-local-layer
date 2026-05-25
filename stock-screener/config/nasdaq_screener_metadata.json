@@ -1,0 +1,16 @@
+{
+  "exchanges": ["nasdaq", "nyse", "amex"],
+  "github_base_url": "https://raw.githubusercontent.com/rreichel3/US-Stock-Symbols/main",
+  "github_repo_api_url": "https://api.github.com/repos/rreichel3/US-Stock-Symbols",
+  "nasdaq_api_url": "https://api.nasdaq.com/api/screener/stocks",
+  "raw_dir": "data/metadata/raw/nasdaq_screener",
+  "processed_metadata_path": "data/metadata/processed/nasdaq_screener_metadata.csv",
+  "joined_universe_path": "data/metadata/processed/filterable_universe.csv",
+  "sector_summary_path": "data/metadata/processed/sector_summary.csv",
+  "industry_summary_path": "data/metadata/processed/industry_summary.csv",
+  "country_summary_path": "data/metadata/processed/country_summary.csv",
+  "metadata_path": "data/metadata/processed/nasdaq_screener_metadata_refresh.json",
+  "active_universe_path": "data/universe/processed/active_universe.csv",
+  "max_source_age_hours": 72,
+  "allow_stale_cache_on_failure": true
+}

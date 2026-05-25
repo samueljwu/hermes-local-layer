@@ -1,0 +1,117 @@
+# Hermes knowledge backup allowlist
+# Ignore everything by default, then explicitly include durable knowledge/system files.
+*
+
+# Repo docs
+!.gitignore
+!.gitattributes
+!README.md
+!RESTORE.md
+!REVIEW_PROTOCOL.md
+!GITHUB_PAT_SETUP.md
+!DEPLOYMENT.md
+!routes.yaml
+
+# Wiki source and VitePress build config
+!wiki/
+!wiki/**
+wiki/node_modules/
+wiki/dist/
+wiki/.vitepress/cache/
+wiki/.vitepress/.temp/
+
+# Homepage, journal, tasks, feed, repo-scout, and stock-screener
+!homepage/
+!homepage/**
+!journal/
+!journal/**
+!tasks/
+!tasks/**
+!feed/
+!feed/**
+!repo-scout/
+!repo-scout/**
+!stock-screener/
+!stock-screener/**
+
+# Standalone project workspaces live outside the Hermes backup repo.
+# Each /home/hermes/projects/* folder is intended to become its own repo.
+projects/
+projects/**
+stock-screener/.env
+stock-screener/.env.*
+stock-screener/**/*secret*
+stock-screener/**/*token*
+stock-screener/**/*credential*
+stock-screener/**/*.lock
+stock-screener/**/*.pid
+stock-screener/logs/
+stock-screener/cache/
+repo-scout/out/
+repo-scout/**/__pycache__/
+repo-scout/**/*.pyc
+repo-scout/.venv/
+repo-scout/*.egg-info/
+
+# Hermes automation/configuration that is useful to reproduce
+!.hermes/
+!.hermes/scripts/
+!.hermes/scripts/**
+!.hermes/hooks/
+!.hermes/hooks/**
+!.hermes/plugins/
+!.hermes/plugins/**
+!.hermes/skills/
+!.hermes/skills/**
+!.hermes/cron/
+!.hermes/cron/jobs.json
+!.hermes/cron/README.md
+!.hermes/memories/
+!.hermes/memories/**
+!.hermes/SOUL.md
+!.hermes/config.example.yaml
+!.hermes/local_channels.yaml
+
+# Generated lock/usage files inside otherwise-included directories
+.hermes/memories/*.lock
+.hermes/skills/.usage.json*
+.hermes/skills/.curator_state
+.hermes/skills/**/*.lock
+
+# Never commit secrets, auth, live config, live state, logs, caches, or transcripts
+.hermes/.env
+.hermes/auth.json
+.hermes/config.yaml
+.hermes/config.yaml.bak*
+.hermes/state.db*
+.hermes/kanban.db
+.hermes/*.lock
+.hermes/*.pid
+.hermes/gateway_state.json
+.hermes/processes.json
+.hermes/channel_directory.json
+.hermes/discord_threads.json
+.hermes/sessions/
+.hermes/logs/
+.hermes/cache/
+.hermes/checkpoints/
+.hermes/cron/output/
+.hermes/pastes/
+.hermes/.hermes_history
+.hermes/.skills_prompt_snapshot.json
+.hermes/.update_check
+.hermes/context_length_cache.yaml
+.hermes/models_dev_cache.json
+.hermes/wiki-build-state.json
+.hermes/wiki-build.lock
+.hermes/interrupt_debug.log
+
+# Do not vendor Hermes source install into this backup repo
+.hermes/hermes-agent/
+
+# Generated/temporary files
+**/__pycache__/
+*.pyc
+*.lock
+*.pid
+.DS_Store

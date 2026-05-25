@@ -1,0 +1,5 @@
+name: tasks-tags
+version: 1.0.0
+description: "Discord #tasks commands: /tags lists all tags; /<tag> shows tasks for that tag."
+author: "Hermes Agent"
+hooks: []

@@ -1,0 +1,29 @@
+{
+  "name": "wiki",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen-sidebar": "node .vitepress/gen-sidebar.mjs",
+    "gen-graph": "node .vitepress/gen-semantic-graph.mjs",
+    "gen-semantic-graph": "node .vitepress/gen-semantic-graph.mjs",
+    "semantic-lint": "node .vitepress/validate-semantic-relationships.mjs",
+    "semantic-query": "node .vitepress/semantic-query.mjs",
+    "test:semantic-stability": "node .vitepress/test-semantic-graph-stability.mjs",
+    "validate-links": "node .vitepress/validate-wiki-links.mjs",
+    "lint": "node .vitepress/gen-sidebar.mjs && node .vitepress/validate-wiki-links.mjs && node .vitepress/gen-semantic-graph.mjs && node .vitepress/validate-semantic-relationships.mjs && python3 _tools/wiki_ops.py opportunities",
+    "deploy-check": "python3 _tools/wiki_ops.py deploy-check",
+    "opportunities": "python3 _tools/wiki_ops.py opportunities",
+    "dev": "vitepress dev .",
+    "build": "mkdir -p public/assets/fonts && cp node_modules/katex/dist/katex.min.css public/assets/katex.min.css && cp node_modules/katex/dist/fonts/* public/assets/fonts/ && node .vitepress/gen-sidebar.mjs && node .vitepress/validate-wiki-links.mjs && node .vitepress/gen-semantic-graph.mjs && node .vitepress/validate-semantic-relationships.mjs && vitepress build . && cp -R public/semantic dist/semantic && cp public/wiki-graph.json dist/wiki-graph.json && mkdir -p dist/assets dist/raw && cp -R public/assets/* dist/assets/ && cp -R src/raw/assets dist/raw/assets",
+    "preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "d3": "^7.9.0",
+    "vitepress": "^1.6.4"
+  },
+  "dependencies": {
+    "katex": "^0.16.45",
+    "markdown-it-katex": "^2.0.3"
+  }
+}

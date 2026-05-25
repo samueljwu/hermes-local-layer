@@ -1,0 +1,5 @@
+name: stock-screener
+version: 1.0.0
+description: "Discord /stockbias and /stocksectors read-only commands for the #stock-screener system."
+author: "Hermes Agent"
+hooks: []

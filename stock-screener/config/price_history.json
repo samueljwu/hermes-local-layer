@@ -1,0 +1,20 @@
+{
+  "input_path": "data/screener/filtered_universe.csv",
+  "provider": "yahoo_chart",
+  "interval": "1wk",
+  "history_years": 3,
+  "output_dir": "data/prices/yahoo_weekly",
+  "metadata_path": "data/prices/yahoo_weekly_metadata.json",
+  "failures_path": "data/prices/yahoo_weekly_failures.csv",
+  "progress_path": "data/prices/yahoo_weekly_progress.jsonl",
+  "freshness_days": 5,
+  "min_delay_seconds": 0.6,
+  "max_delay_seconds": 1.4,
+  "max_retries": 3,
+  "backoff_seconds": [5, 20, 60],
+  "stop_after_rate_limit_errors": 5,
+  "request_timeout_seconds": 30,
+  "min_expected_rows": 120,
+  "max_elapsed_seconds": 420,
+  "workers": 1
+}

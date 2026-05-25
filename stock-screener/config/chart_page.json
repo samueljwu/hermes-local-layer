@@ -1,0 +1,14 @@
+{
+  "matches_path": "data/patterns/latest_matches.csv",
+  "price_dir": "data/prices/yahoo_daily",
+  "fallback_price_dir": "data/prices/yahoo_weekly",
+  "output_dir": "site/dist",
+  "shortlist_path": "data/patterns/all_candidate_charts.csv",
+  "sample_size": "all",
+  "lookback_days": 260,
+  "daily_history_years": 2,
+  "daily_cache_fresh_days": 5,
+  "fetch_missing_daily": true,
+  "random_seed": null,
+  "title": "Stock Screener"
+}

@@ -1,0 +1,48 @@
+{
+  "sources": {
+    "nasdaq": {
+      "url": "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt",
+      "raw_path": "data/universe/raw/nasdaqlisted.txt"
+    },
+    "nyse": {
+      "url": "https://www.nyse.com/api/quotes/filter",
+      "raw_path": "data/universe/raw/nyse_quotes_filter.json"
+    }
+  },
+  "filters": {
+    "exclude_etfs": true,
+    "exclude_test_issues": true,
+    "exclude_name_contains": [
+      " ETF",
+      " EXCHANGE TRADED",
+      " FUND",
+      " ETN",
+      " NOTE",
+      " NOTES",
+      " PRF ",
+      " PFD ",
+      " PREFERRED",
+      " BOND",
+      " WARRANT",
+      " WARRANTS",
+      " RIGHT",
+      " RIGHTS",
+      " UNIT",
+      " UNITS",
+      " PREFERRED",
+      " PREFERENCE",
+      " CLOSED END",
+      " CLOSED-END"
+    ],
+    "exclude_symbol_contains": [
+      ".W",
+      ".U",
+      ".R",
+      ".P",
+      "-W",
+      "-U",
+      "-R",
+      "-P"
+    ]
+  }
+}

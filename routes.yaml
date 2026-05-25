@@ -1,0 +1,24 @@
+# Canonical local static route manifest for the Hermes public surfaces.
+# Other README files should link here instead of restating Tailscale Serve routing.
+# Paths are absolute on the current /home/hermes host.
+routes:
+  "/":
+    path: "/home/hermes/homepage/dist"
+    owner: "homepage"
+    kind: "generated_static_artifact"
+    notes: "Root landing page. Also contains generated /feed/ picks page under dist/feed/."
+  "/feed/":
+    path: "/home/hermes/homepage/dist/feed"
+    owner: "feed"
+    kind: "generated_static_artifact"
+    notes: "Rendered by /home/hermes/feed/_tools/render_feed_page.py from feed-local recommendation history. Served by the root homepage mapping."
+  "/wiki/":
+    path: "/home/hermes/wiki/dist"
+    owner: "wiki"
+    kind: "generated_static_site"
+    notes: "VitePress build output from /home/hermes/wiki/src. Do not edit dist directly."
+  "/stocks/":
+    path: "/home/hermes/stock-screener/site/dist"
+    owner: "stock-screener"
+    kind: "generated_static_site"
+    notes: "Static stock review pages produced by the stock-screener weekly workflow."

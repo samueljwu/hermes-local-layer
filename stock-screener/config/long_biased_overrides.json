@@ -1,0 +1,9 @@
+{
+  "description": "Manually maintained #stock-screener-only list. Symbols in this file receive long-biased price-chart override treatment. Do not auto-update from scanner feedback.",
+  "symbols": [
+    "NVDA",
+    "AAPL",
+    "TSM",
+    "GOOGL"
+  ]
+}

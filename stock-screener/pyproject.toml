@@ -1,0 +1,10 @@
+[project]
+name = "stock-screener"
+version = "0.1.0"
+description = "Weekly batch stock screener report generator"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.stock-screener]
+# This project is intentionally separate from feed/journal/tasks/wiki/repo-scout.
+# Wiki access from stock-screener workflows is read-only only; never mutate /home/hermes/wiki or its harness.
