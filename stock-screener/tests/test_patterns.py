@@ -77,6 +77,35 @@ class PatternTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match.pattern, "support_bounce_uptrend")
 
+    def test_support_bounce_rejects_lower_highs_into_nearby_resistance(self):
+        rows = [row(i, 45 + i * 0.35, volume=1000) for i in range(1, 53)]
+        recent = [
+            (53, 57.60, 58.33, 56.45),
+            (54, 56.87, 57.84, 56.24),
+            (55, 56.33, 57.38, 55.27),
+            (56, 57.18, 57.83, 56.08),
+            (57, 56.09, 57.82, 55.80),
+            (58, 54.71, 56.69, 54.71),
+            (59, 56.23, 56.45, 54.80),
+            (60, 56.48, 56.62, 55.99),
+        ]
+        rows.extend(row(i, close, high=high, low=low, volume=1000) for i, close, high, low in recent)
+        match = detect_support_bounce_uptrend("TEST", rows, {
+            "support_sma_weeks": 20,
+            "trend_sma_weeks": 40,
+            "support_tolerance_pct": 4.0,
+            "bounce_lookback_weeks": 4,
+            "min_bounce_from_low_pct": 3.0,
+            "min_close_above_support_pct": 0.0,
+            "max_close_above_support_pct": 4.0,
+            "min_short_vs_trend_pct": 0.0,
+            "recent_resistance_lookback_weeks": 8,
+            "max_nearby_recent_resistance_pct": 5.0,
+            "min_lower_highs_decline_pct": 0.5,
+            "max_recent_return_under_resistance_pct": 0.0,
+        })
+        self.assertIsNone(match)
+
     def test_is_downtrend_when_price_and_short_average_are_below_long_average(self):
         rows = [row(i, 100 - i, volume=1000) for i in range(1, 50)]
         self.assertTrue(is_downtrend(rows, {
