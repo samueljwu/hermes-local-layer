@@ -207,6 +207,8 @@ python3 scripts/validate_price_history.py
 /home/hermes/.hermes/scripts/backup_security_harness.py --all
 ```
 
+The backup security harness reports only paths and rule names. Narrow false-positive exemptions are allowed only when path-scoped and value-prefix-specific; for example, public wiki source slugs beginning with `sk-hynix-` are exempt from the OpenAI `sk-...` token rule while real matching keys in the same files remain blocked.
+
 ## Concurrency and write safety
 
 Shared write paths should use advisory locking plus atomic temp-file promotion.

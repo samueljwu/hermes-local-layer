@@ -69,6 +69,20 @@ ALLOW_FALSE_POSITIVE_PATHS = {
     # are still scanned for provider-specific token formats above.
 }
 
+# Public wiki source slugs can contain company names that look like provider
+# token prefixes. Keep exemptions token-specific and path-scoped so real keys in
+# the same file are still caught.
+ALLOW_SECRET_VALUE_PREFIXES: dict[str, tuple[tuple[str, str], ...]] = {
+    "openai_key": (("wiki/", "sk-hynix-"),),
+}
+
+
+def allowed_secret_value_false_positive(path: str, rule_name: str, token: str) -> bool:
+    return any(
+        path.startswith(path_prefix) and token.startswith(value_prefix)
+        for path_prefix, value_prefix in ALLOW_SECRET_VALUE_PREFIXES.get(rule_name, ())
+    )
+
 
 def git(args: list[str], *, check: bool = True) -> str:
     proc = subprocess.run(
@@ -154,7 +168,10 @@ def scan_content(paths: Iterable[str]) -> list[str]:
         if text is None:
             continue
         for name, pattern in SECRET_VALUE_RULES:
-            if pattern.search(text):
+            if any(
+                not allowed_secret_value_false_positive(path, name, match.group(0))
+                for match in pattern.finditer(text)
+            ):
                 findings.append(f"{path}: content rule {name}")
         if suspicious_high_entropy_assignments(text):
             findings.append(f"{path}: content rule secret_assignment_high_entropy")
