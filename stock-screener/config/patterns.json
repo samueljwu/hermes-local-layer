@@ -20,10 +20,18 @@
   },
   "long_biased_override": {
     "enabled": true,
-    "support_sma_weeks": [20, 50, 200],
+    "support_sma_weeks": [
+      20,
+      50,
+      200
+    ],
     "support_touch_tolerance_pct": 5.0,
     "support_lookback_weeks": 6,
-    "resistance_lookback_weeks": [13, 26, 52],
+    "resistance_lookback_weeks": [
+      13,
+      26,
+      52
+    ],
     "resistance_touch_tolerance_pct": 4.0,
     "max_resistance_extension_pct": 15.0,
     "drawdown_high_lookback_weeks": 104,
@@ -62,7 +70,12 @@
   },
   "resistance_breakout": {
     "enabled": true,
-    "lookback_weeks": [13, 26, 52, 104],
+    "lookback_weeks": [
+      13,
+      26,
+      52,
+      104
+    ],
     "resistance_tolerance_pct": 3.0,
     "breakout_buffer_pct": 1.0,
     "max_breakout_extension_pct": 15.0,
@@ -79,7 +92,11 @@
   },
   "double_bottom_breakout": {
     "enabled": true,
-    "lookback_weeks": [26, 52, 104],
+    "lookback_weeks": [
+      26,
+      52,
+      104
+    ],
     "min_bottom_separation_weeks": 4,
     "max_bottom_separation_weeks": 32,
     "max_low_difference_pct": 7.0,
@@ -90,8 +107,16 @@
     "major_overhead_lookback_weeks": 104,
     "max_unbroken_overhead_pct": 15.0,
     "max_overhead_pct": 17.0,
+    "unresolved_prior_top_trend_filter": {
+      "enabled": true,
+      "min_overhead_pct": 10.0,
+      "ma_weeks": 30,
+      "ma_slope_lookback_weeks": 10,
+      "min_ma_slope_pct": -0.5,
+      "reject_when_trend_unavailable": true
+    },
     "volume_average_weeks": 10,
-    "min_volume_ratio": 1.10
+    "min_volume_ratio": 1.1
   },
   "support_bounce_uptrend": {
     "enabled": true,

@@ -1,4 +1,6 @@
+import json
 import unittest
+from pathlib import Path
 
 from stock_screener.patterns import (
     detect_double_bottom_breakout,
@@ -6,6 +8,7 @@ from stock_screener.patterns import (
     detect_resistance_breakout,
     detect_support_bounce_uptrend,
     is_downtrend,
+    read_price_csv,
 )
 
 
@@ -59,6 +62,14 @@ class PatternTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match.pattern, "double_bottom_breakout")
         self.assertGreater(match.evidence["depth_pct"], 10)
+
+    def test_double_bottom_rejects_p_like_unresolved_prior_top_without_obvious_trend(self):
+        root = Path(__file__).resolve().parents[1]
+        rows = read_price_csv(root / "data/prices/yahoo_weekly/P.csv")
+        config = json.loads((root / "config/patterns.json").read_text())["double_bottom_breakout"]
+        config["weinstein_stage2"] = json.loads((root / "config/patterns.json").read_text())["weinstein_stage2"]
+        match = detect_double_bottom_breakout("P", rows, config)
+        self.assertIsNone(match)
 
     def test_detect_support_bounce_in_uptrend_near_sma_support(self):
         rows = [row(i, 50 + i, volume=1000) for i in range(1, 45)]
