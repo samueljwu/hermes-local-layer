@@ -324,12 +324,51 @@ def _role_tasks(user_message: str, round_label: str, peer_context: str = "") -> 
 def _dispatch_delegate(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
     if _CTX is None:
         return {"error": "plugin context unavailable"}
-    raw = _CTX.dispatch_tool("delegate_task", {"tasks": tasks})
+    try:
+        raw = _CTX.dispatch_tool("delegate_task", {"tasks": tasks})
+    except Exception as exc:
+        return {"error": str(exc)}
     try:
         data = json.loads(raw)
     except Exception:
         return {"raw": raw}
     return data if isinstance(data, dict) else {"raw": data}
+
+
+def _delegate_unavailable(data: Dict[str, Any]) -> bool:
+    """Return True when gateway/plugin dispatch cannot access parent-agent delegation."""
+    text = " ".join(str(data.get(key, "")) for key in ("error", "raw"))
+    lowered = text.lower()
+    return any(
+        indicator in lowered
+        for indicator in (
+            "parent agent context",
+            "requires a parent",
+            "plugin context unavailable",
+            "delegate_task unavailable",
+            "delegate_task not available",
+        )
+    )
+
+
+def _delegate_fallback_context(kind: str, detail: str = "") -> str:
+    suffix = (
+        "\nDelegate dispatch detail: delegate_task unavailable in this context"
+        if detail
+        else ""
+    )
+    return (
+        f"CB-ARB {kind.upper()} FALLBACK CONTEXT:\n"
+        "The cb-arb hook could not spawn specialist subagents from this gateway/plugin context, "
+        "so it is providing deterministic project guidance instead of injecting a failed review result.\n"
+        + _lightweight_context()
+        + (
+            "\n\nWhen a parent-agent context with delegate_task is available, "
+            "the agent may run the specialist review manually using the shared "
+            "evidence packet and the role prompts from the cb-arb hook."
+        )
+        + suffix
+    )
 
 
 def _compact_result(data: Dict[str, Any], *, limit: int = 6000) -> str:
@@ -347,6 +386,9 @@ def _panel_context(user_message: str) -> Dict[str, str]:
         _ACTIVE = True
     try:
         round1 = _dispatch_delegate(_role_tasks(user_message, "single round: focused specialist review"))
+        if _delegate_unavailable(round1):
+            detail = str(round1.get("error") or round1.get("raw") or "")
+            return {"context": _delegate_fallback_context("specialist panel", detail)}
         if isinstance(round1, dict) and round1.get("error"):
             return {
                 "context": (
@@ -361,7 +403,21 @@ def _panel_context(user_message: str) -> Dict[str, str]:
         rounds = int(os.getenv("CB_ARB_PANEL_ROUNDS", "1") or "1")
         if rounds >= 2:
             peer_context = _compact_result(round1, limit=4000)
-            round2 = _dispatch_delegate(_role_tasks(user_message, "round 2: only reconcile material conflicts", peer_context))
+            round2 = _dispatch_delegate(
+                _role_tasks(
+                    user_message,
+                    "round 2: only reconcile material conflicts",
+                    peer_context,
+                )
+            )
+            if _delegate_unavailable(round2):
+                detail = str(round2.get("error") or round2.get("raw") or "")
+                return {
+                    "context": _delegate_fallback_context(
+                        "specialist panel reconciliation",
+                        detail,
+                    )
+                }
         else:
             round2 = {"skipped": "default one-round panel for token efficiency; set CB_ARB_PANEL_ROUNDS=2 to enable reconciliation"}
 
@@ -388,6 +444,9 @@ def _brief_review_context(user_message: str) -> Dict[str, str]:
         _ACTIVE = True
     try:
         result = _dispatch_delegate(_brief_review_task(user_message))
+        if _delegate_unavailable(result):
+            detail = str(result.get("error") or result.get("raw") or "")
+            return {"context": _delegate_fallback_context("single specialist review", detail)}
         combined = {
             "hook": "cb-arb-agent-hook",
             "project_root": PROJECT_ROOT,
