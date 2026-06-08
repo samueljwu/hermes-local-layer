@@ -14,6 +14,7 @@ const activeRelationships = ref(new Set())
 const selectedNode = ref(null)
 const hoveredNodeId = ref(null)
 const cardCollapsed = ref(false)
+const graphGesturesEnabled = ref(false)
 const svgRef = ref(null)
 const containerRef = ref(null)
 
@@ -417,6 +418,27 @@ function zoomOut() {
   if (latestSvg && zoomBehavior) latestSvg.call(zoomBehavior.scaleBy, 0.8)
 }
 
+function graphGestureAllowed(event) {
+  if (event.button && event.button !== 0) return false
+  if (event.target?.closest?.('.wiki-graph-node')) return false
+  if (event.type === 'wheel') return true
+  if (event.type?.startsWith?.('touch')) return graphGesturesEnabled.value
+  if (event.pointerType === 'touch') return graphGesturesEnabled.value
+  if (event.type === 'mousedown' || event.type === 'pointerdown') return true
+  return true
+}
+
+function nodeDragAllowed(event) {
+  if (event.button && event.button !== 0) return false
+  if (event.type?.startsWith?.('touch')) return graphGesturesEnabled.value
+  if (event.pointerType === 'touch') return graphGesturesEnabled.value
+  return true
+}
+
+function toggleGraphGestures() {
+  graphGesturesEnabled.value = !graphGesturesEnabled.value
+}
+
 async function renderGraph() {
   if (!d3 || !svgRef.value || !containerRef.value) return
   destroyGraph()
@@ -431,7 +453,7 @@ async function renderGraph() {
     .attr('width', '100%')
     .attr('height', height)
     .attr('role', 'img')
-    .attr('aria-label', 'Wiki semantic graph. Drag empty space to pan, scroll to zoom, and drag nodes to reposition them.')
+    .attr('aria-label', 'Wiki semantic graph. Scroll over the graph to zoom, drag empty space to pan, and drag nodes to reposition them. On touch screens, enable graph controls before panning the graph.')
 
   latestSvg = svg
   svg.selectAll('*').remove()
@@ -465,11 +487,7 @@ async function renderGraph() {
 
   zoomBehavior = d3.zoom()
     .scaleExtent([0.25, 4])
-    .filter((event) => {
-      if (event.button && event.button !== 0) return false
-      if (event.target?.closest?.('.wiki-graph-node')) return false
-      return true
-    })
+    .filter(graphGestureAllowed)
     .on('start', () => svg.classed('wiki-graph-dragging', true))
     .on('zoom', (event) => {
       currentTransform = event.transform
@@ -529,10 +547,11 @@ async function renderGraph() {
     .data(simNodes)
     .join('g')
     .attr('class', 'wiki-graph-node')
-    .style('cursor', 'grab')
+    .style('cursor', 'pointer')
     .on('mouseenter', (_event, d) => { hoveredNodeId.value = d.id })
     .on('mouseleave', () => { hoveredNodeId.value = null })
     .call(d3.drag()
+      .filter(nodeDragAllowed)
       .on('start', dragstarted)
       .on('drag', dragged)
       .on('end', dragended))
@@ -693,6 +712,9 @@ onBeforeUnmount(() => {
       <div class="wiki-graph-toolbar-actions">
         <input v-model="search" class="wiki-graph-search" type="search" placeholder="Search pages, tags, types…" />
         <div class="wiki-graph-controls" aria-label="Graph navigation controls">
+          <button class="wiki-graph-control wiki-graph-interaction-toggle" type="button" :class="{ active: graphGesturesEnabled }" :aria-pressed="graphGesturesEnabled" @click="toggleGraphGestures">
+            {{ graphGesturesEnabled ? 'Touch controls on' : 'Enable touch controls' }}
+          </button>
           <button class="wiki-graph-control" type="button" :disabled="loading || error || filtered.nodes.length === 0" @click="zoomOut" aria-label="Zoom out">−</button>
           <button class="wiki-graph-control" type="button" :disabled="loading || error || filtered.nodes.length === 0" @click="zoomIn" aria-label="Zoom in">+</button>
           <button class="wiki-graph-control" type="button" :disabled="loading || error || filtered.nodes.length === 0" @click="fitGraph">Fit</button>
@@ -756,7 +778,11 @@ onBeforeUnmount(() => {
     <p v-else-if="error" class="wiki-graph-error">{{ error }}</p>
 
     <div v-show="!loading && !error" class="wiki-graph-layout">
-      <div class="wiki-graph-stage">
+      <div class="wiki-graph-stage" :class="{ 'gestures-enabled': graphGesturesEnabled }">
+        <div class="wiki-graph-interaction-hint">
+          <span class="wiki-graph-desktop-hint">Scroll over the graph to zoom. Drag empty space to pan; drag nodes to reposition them.</span>
+          <span class="wiki-graph-touch-hint">Page scroll stays enabled. Tap “Enable graph controls” to pan or drag nodes, then turn it off to scroll normally.</span>
+        </div>
         <svg ref="svgRef"></svg>
         <div v-if="filtered.nodes.length === 0" class="wiki-graph-empty-panel">
           <strong>No pages match the current filters.</strong>

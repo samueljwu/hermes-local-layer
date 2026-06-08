@@ -233,17 +233,10 @@ body {
 }
 
 .wiki-graph {
-  --wiki-graph-width: min(92vw, calc(100vw - 2rem), 1680px);
-  width: var(--wiki-graph-width);
-  max-width: none;
+  width: 100%;
+  max-width: 100%;
   margin: 1.5rem 0 3rem;
-}
-
-@media (min-width: 960px) {
-  .wiki-graph {
-    --wiki-graph-width: min(92vw, calc(100vw - var(--vp-sidebar-width, 272px) - 6rem), 1680px);
-    margin-left: calc((100vw - var(--vp-sidebar-width, 272px) - var(--wiki-graph-width)) / 2 - 4rem);
-  }
+  box-sizing: border-box;
 }
 
 .wiki-graph-toolbar,
@@ -320,6 +313,12 @@ body {
   border-color: var(--vp-c-brand-1);
 }
 
+.wiki-graph-interaction-toggle.active {
+  border-color: var(--vp-c-brand-1);
+  background: color-mix(in srgb, var(--vp-c-brand-soft) 68%, var(--vp-c-bg-soft));
+  color: var(--vp-c-text-1);
+}
+
 .wiki-graph-filters,
 .wiki-graph-relationships {
   justify-content: flex-start;
@@ -368,7 +367,8 @@ body {
   max-height: 12rem;
   margin: 0.25rem 0 1rem;
   padding: 0.75rem;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid var(--vp-c-divider);
   border-radius: 16px;
   background: color-mix(in srgb, var(--vp-c-bg-soft) 70%, transparent);
@@ -439,7 +439,7 @@ body {
 .wiki-graph-stage {
   position: relative;
   overflow: hidden;
-  min-height: clamp(520px, 72svh, 960px);
+  min-height: clamp(380px, 62svh, 720px);
   border: 1px solid var(--vp-c-divider);
   border-radius: 16px;
   background:
@@ -448,11 +448,45 @@ body {
     var(--vp-c-bg-soft);
 }
 
+.wiki-graph-interaction-hint {
+  position: absolute;
+  z-index: 2;
+  top: 0.7rem;
+  left: 0.7rem;
+  max-width: min(34rem, calc(100% - 1.4rem));
+  border: 1px solid color-mix(in srgb, var(--vp-c-divider) 75%, transparent);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  background: color-mix(in srgb, var(--vp-c-bg) 88%, transparent);
+  color: var(--vp-c-text-2);
+  font-size: 0.78rem;
+  line-height: 1.3;
+  box-shadow: var(--vp-shadow-1);
+  pointer-events: none;
+}
+
+.wiki-graph-interaction-hint kbd {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.25rem;
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-1);
+  font-size: 0.72rem;
+}
+
+.wiki-graph-touch-hint {
+  display: none;
+}
+
 .wiki-graph-stage svg {
   display: block;
   width: 100%;
-  height: clamp(520px, 72svh, 960px);
+  height: clamp(380px, 62svh, 720px);
   cursor: grab;
+  touch-action: pan-y pinch-zoom;
+}
+
+.wiki-graph-stage.gestures-enabled svg {
   touch-action: none;
 }
 
@@ -465,6 +499,10 @@ body {
 }
 
 .wiki-graph-zoom-capture {
+  cursor: grab;
+}
+
+.wiki-graph-stage.gestures-enabled .wiki-graph-zoom-capture {
   cursor: grab;
 }
 
@@ -598,6 +636,50 @@ body {
   margin-top: 0.65rem;
   color: var(--vp-c-brand-1);
   font-weight: 600;
+}
+
+@media (max-width: 719px) {
+  .wiki-graph-toolbar-actions,
+  .wiki-graph-search,
+  .wiki-graph-controls {
+    width: 100%;
+  }
+
+  .wiki-graph-controls {
+    flex-wrap: wrap;
+  }
+
+  .wiki-graph-interaction-toggle {
+    flex: 1 1 100%;
+  }
+
+  .wiki-graph-relationships {
+    max-height: 9rem;
+  }
+
+  .wiki-graph-stage {
+    min-height: clamp(320px, 54svh, 560px);
+  }
+
+  .wiki-graph-stage svg {
+    height: clamp(320px, 54svh, 560px);
+  }
+
+  .wiki-graph-interaction-hint {
+    top: 0.5rem;
+    left: 0.5rem;
+    max-width: calc(100% - 1rem);
+    border-radius: 12px;
+    font-size: 0.74rem;
+  }
+
+  .wiki-graph-desktop-hint {
+    display: none;
+  }
+
+  .wiki-graph-touch-hint {
+    display: inline;
+  }
 }
 
 /* Reusable source-friendly flow diagrams for concept pages. */
