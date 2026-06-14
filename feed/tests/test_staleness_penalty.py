@@ -162,5 +162,30 @@ class StalenessPenaltyTests(unittest.TestCase):
             feed_ops.relevance = original_relevance
 
 
+class ArticleLevelSemanticUsefulnessTests(unittest.TestCase):
+    def test_core_source_can_have_low_alignment_article(self):
+        feed_ops = load_feed_ops()
+        original_relevance = feed_ops.relevance
+        try:
+            items = [
+                {"candidate_id": "neuralink:a", "source": "neuralink_updates", "title": "Strong BCI update", "summary": "brain computer interface neural decoding for assistive control"},
+                {"candidate_id": "neuralink:b", "source": "neuralink_updates", "title": "Company community event", "summary": "photos from a staff gathering, recruiting booth, office tour, and general corporate announcements"},
+            ]
+            rel = {"neuralink:a": (3.2, "neurotechnology and BCI"), "neuralink:b": (0.0, "")}
+            feed_ops.relevance = lambda item, profile: rel[item["candidate_id"]]
+
+            report = feed_ops.semantic_usefulness_report(
+                items,
+                {"active_interests": [{"topic": "neurotechnology and BCI", "weight": 1.0}]},
+                {"id": "neuralink_updates", "semantic_role": "core_interest", "expected_topics": ["neurotechnology and BCI"]},
+            )
+
+            self.assertEqual(report["metrics"]["core_interest"], 1)
+            self.assertEqual(report["metrics"]["low_semantic"], 1)
+            self.assertEqual([row["alignment"] for row in report["samples"]], ["core_interest", "low_semantic"])
+        finally:
+            feed_ops.relevance = original_relevance
+
+
 if __name__ == "__main__":
     unittest.main()

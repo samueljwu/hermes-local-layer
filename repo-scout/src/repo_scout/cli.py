@@ -17,6 +17,31 @@ from .interests import build_interest_profile
 from .ranking import rank_repos
 from .api_budget import estimate_api_budget
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUT_DIR = REPO_ROOT / "out"
+
+
+def _require_under(path: Path, root: Path, label: str) -> Path:
+    resolved = path.expanduser().resolve()
+    root_resolved = root.resolve()
+    if resolved == root_resolved or root_resolved in resolved.parents:
+        return resolved
+    raise ValueError(f"{label} must stay under {root_resolved}: {resolved}")
+
+
+def resolve_output_dir(path: Path) -> Path:
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return _require_under(path, DEFAULT_OUT_DIR, "Repo Scout output directory")
+
+
+def resolve_feedback_path(path: Path | None, out_dir: Path) -> Path | None:
+    if path is None:
+        return None
+    if not path.is_absolute():
+        path = out_dir / path
+    return _require_under(path, out_dir, "Repo Scout feedback path")
+
 
 @contextmanager
 def _scout_lock(out_dir: Path):
@@ -63,6 +88,8 @@ def _error_result(error: GitHubAPIError, cfg: ScoutConfig, out_dir: Path, starte
 
 
 def run_scout(config_path: Path, out_dir: Path, dry_run: bool = False, feedback_path: Path | None = None) -> dict:
+    out_dir = resolve_output_dir(out_dir)
+    feedback_path = resolve_feedback_path(feedback_path, out_dir)
     with _scout_lock(out_dir):
         return _run_scout_locked(config_path, out_dir, dry_run=dry_run, feedback_path=feedback_path)
 

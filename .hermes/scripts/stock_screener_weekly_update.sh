@@ -8,7 +8,7 @@ LOG_PATH="$LOG_DIR/weekly_update_$(date -u +%Y%m%dT%H%M%SZ).log"
 LOCK_PATH="/tmp/stock_screener_weekly_update.lock"
 
 set +e
-flock -n "$LOCK_PATH" "$ROOT/scripts/weekly_update.sh" >"$LOG_PATH" 2>&1
+HERMES_STOCK_SCREENER_LOCK_HELD=1 flock -n "$LOCK_PATH" "$ROOT/scripts/weekly_update.sh" >"$LOG_PATH" 2>&1
 status=$?
 set -e
 

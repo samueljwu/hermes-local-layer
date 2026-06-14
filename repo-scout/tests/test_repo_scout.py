@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from repo_scout.api_budget import estimate_api_budget
-from repo_scout.cli import run_scout
+from repo_scout.cli import run_scout, resolve_output_dir
 from repo_scout.config import ScoutConfig, load_config
 from repo_scout.filters import has_min_commits_each_month, passes_hard_filters
 from repo_scout.feedback import load_feedback_profile, parse_feedback_args, record_feedback
@@ -330,7 +330,11 @@ class RepoScoutTests(unittest.TestCase):
             from repo_scout import cli
 
             original = cli.search_repositories
+            original_repo_root = cli.REPO_ROOT
+            original_default_out = cli.DEFAULT_OUT_DIR
             try:
+                cli.REPO_ROOT = tmp_path
+                cli.DEFAULT_OUT_DIR = out_dir
                 def raise_rate_limit(client, cfg):
                     raise GitHubRateLimitError(
                         status=403,
@@ -346,11 +350,30 @@ class RepoScoutTests(unittest.TestCase):
                 result = run_scout(config_path, out_dir)
             finally:
                 cli.search_repositories = original
+                cli.REPO_ROOT = original_repo_root
+                cli.DEFAULT_OUT_DIR = original_default_out
 
             self.assertEqual(result["mode"], "live-readonly-error")
             self.assertEqual(result["error"]["status"], 403)
             self.assertEqual(result["error"]["rate_limit_remaining"], "0")
             self.assertTrue((out_dir / "error_report.json").exists())
+
+    def test_output_dir_must_stay_under_repo_scout_out(self):
+        from repo_scout import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            original_repo_root = cli.REPO_ROOT
+            original_default_out = cli.DEFAULT_OUT_DIR
+            try:
+                cli.REPO_ROOT = tmp_path
+                cli.DEFAULT_OUT_DIR = tmp_path / "out"
+                self.assertEqual(resolve_output_dir(Path("out/run")), (tmp_path / "out" / "run").resolve())
+                with self.assertRaises(ValueError):
+                    resolve_output_dir(tmp_path / "elsewhere")
+            finally:
+                cli.REPO_ROOT = original_repo_root
+                cli.DEFAULT_OUT_DIR = original_default_out
 
     def test_load_config_from_yaml(self):
         with tempfile.TemporaryDirectory() as td:

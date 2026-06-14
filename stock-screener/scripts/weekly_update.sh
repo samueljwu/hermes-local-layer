@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT="/home/hermes/stock-screener"
 cd "$ROOT"
 
+LOCK_PATH="/tmp/stock_screener_weekly_update.lock"
+if [[ "${HERMES_STOCK_SCREENER_LOCK_HELD:-0}" != "1" ]]; then
+  export HERMES_STOCK_SCREENER_LOCK_HELD=1
+  exec flock -n "$LOCK_PATH" "$0" "$@"
+fi
+
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
 started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
