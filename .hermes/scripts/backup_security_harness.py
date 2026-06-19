@@ -69,11 +69,14 @@ ALLOW_FALSE_POSITIVE_PATHS = {
     # are still scanned for provider-specific token formats above.
 }
 
-# Public wiki source slugs can contain company names that look like provider
-# token prefixes. Keep exemptions token-specific and path-scoped so real keys in
-# the same file are still caught.
+# Public article/source slugs can contain company names that look like provider
+# token prefixes. Keep exemptions token-specific, value-prefix-specific, and
+# path-scoped so real keys in the same file are still caught.
 ALLOW_SECRET_VALUE_PREFIXES: dict[str, tuple[tuple[str, str], ...]] = {
-    "openai_key": (("wiki/", "sk-hynix-"),),
+    "openai_key": (
+        ("wiki/", "sk-hynix-"),
+        ("feed/_meta/candidates.json", "sk-telecom-"),
+    ),
 }
 
 
