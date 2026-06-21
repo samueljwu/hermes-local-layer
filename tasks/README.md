@@ -43,9 +43,9 @@ Routine commands:
 ```
 
 Discord automation:
-- Dashboard updater: `/home/hermes/.hermes/scripts/update_tasks_dashboard.py`
+- Dashboard updater script: `/home/hermes/.hermes/scripts/update_tasks_dashboard.py` (manual/on-demand; no enabled dashboard-updater cron is present in `.hermes/cron/jobs.json` as of this review).
 - Tag command sync: `/home/hermes/.hermes/scripts/discord_tag_commands.py`
-- Due-tomorrow reminder cron: `9d28b37d3bc6` at 09:00 HKT
+- Due-tomorrow reminder cron: `9d28b37d3bc6` at 22:00 HKT
 - Due-today reminder crons: `203eaf5378d2` at 06:00 HKT and `4a01545f43fd` at 18:00 HKT
 - Reminders should deliver to the main Discord `#tasks` channel, not threads.
 

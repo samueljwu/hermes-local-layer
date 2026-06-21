@@ -26,7 +26,7 @@ from stock_screener.patterns import (  # noqa: E402
     read_price_csv,
     sma,
 )
-from stock_screener.price_history import fetch_symbol_with_retries, is_cache_fresh  # noqa: E402
+from stock_screener.price_history import is_cache_fresh  # noqa: E402
 from stock_screener.symbols import normalize_symbol, safe_symbol_path  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "patterns.json"
@@ -114,16 +114,9 @@ def daily_support_confirmation(symbol: str, support_config: dict) -> tuple[bool,
     daily_dir = ROOT / support_config.get("daily_price_dir", "data/prices/yahoo_daily")
     path = safe_symbol_path(daily_dir, symbol, ".csv")
     if not is_cache_fresh(path, int(support_config.get("daily_cache_fresh_days", 5)), 50):
-        fetch_symbol_with_retries(
-            symbol=symbol,
-            output_dir=daily_dir,
-            history_years=int(support_config.get("daily_history_years", 2)),
-            interval="1d",
-            timeout_seconds=20,
-            max_retries=2,
-            backoff_seconds=[2, 5],
-            min_expected_rows=50,
-        )
+        # Scans must remain cache-only. Refresh daily cache in the dedicated
+        # price-history refresh phase; do not call live providers from here.
+        return True, {"daily_confirmation": "stale_or_missing"}
     if not path.exists():
         # Do not exclude solely because the daily confirmation cache is unavailable.
         return True, {"daily_confirmation": "missing"}

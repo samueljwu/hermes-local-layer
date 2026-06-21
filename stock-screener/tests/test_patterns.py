@@ -1,6 +1,9 @@
+import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, cast
 
 from stock_screener.patterns import (
     detect_double_bottom_breakout,
@@ -24,6 +27,17 @@ def row(i, close, high=None, low=None, volume=1000):
         "adj_close": close,
         "volume": volume,
     }
+
+ROOT = Path(__file__).resolve().parents[1]
+SCAN_PATTERNS = ROOT / "scripts" / "scan_patterns.py"
+
+
+def load_scan_patterns():
+    spec = importlib.util.spec_from_file_location("scan_patterns_tested", SCAN_PATTERNS)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class PatternTests(unittest.TestCase):
@@ -116,6 +130,26 @@ class PatternTests(unittest.TestCase):
             "max_recent_return_under_resistance_pct": 0.0,
         })
         self.assertIsNone(match)
+
+    def test_support_bounce_scan_uses_cache_only_for_daily_confirmation(self):
+        scan_patterns = load_scan_patterns()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_root = scan_patterns.ROOT
+            scan_patterns_mut = cast(Any, scan_patterns)
+            try:
+                scan_patterns_mut.ROOT = root
+                ok, evidence = scan_patterns.daily_support_confirmation("TEST", {
+                    "daily_confirmation_enabled": True,
+                    "daily_price_dir": "data/prices/yahoo_daily",
+                    "daily_cache_fresh_days": 5,
+                })
+            finally:
+                scan_patterns_mut.ROOT = old_root
+
+        self.assertTrue(ok)
+        self.assertEqual(evidence["daily_confirmation"], "stale_or_missing")
+        self.assertFalse((root / "data" / "prices" / "yahoo_daily" / "TEST.csv").exists())
 
     def test_is_downtrend_when_price_and_short_average_are_below_long_average(self):
         rows = [row(i, 100 - i, volume=1000) for i in range(1, 50)]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -134,6 +135,23 @@ def _request_kind(path_or_url: str) -> str:
     return "core"
 
 
+def _atomic_write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+
 @dataclass
 class RequestPacer:
     """Small conservative pacer for uncached GitHub GET requests.
@@ -208,7 +226,13 @@ class GitHubClient:
         kind = _request_kind(path_or_url)
         cache_path = self._cache_path(url)
         if cache_path and cache_path.exists() and time.time() - cache_path.stat().st_mtime < self.cache_ttl:
-            return json.loads(cache_path.read_text(encoding="utf-8"))
+            try:
+                return json.loads(cache_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                try:
+                    cache_path.unlink()
+                except OSError:
+                    pass
 
         attempts = 0
         while True:
@@ -254,7 +278,7 @@ class GitHubClient:
             except urllib.error.URLError as err:
                 raise GitHubAPIError(status=None, reason="URL error", url=url, message=str(err.reason)) from err
         if cache_path:
-            cache_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+            _atomic_write_json(cache_path, data)
         return data
 
 

@@ -247,6 +247,41 @@ class RepoScoutTests(unittest.TestCase):
             else:
                 os.environ.pop("HOME", None)
 
+    def test_github_client_ignores_corrupt_cache_and_rewrites_atomically(self):
+        from repo_scout import github_api
+
+        class FakeResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        with tempfile.TemporaryDirectory() as td:
+            client = GitHubClient(cache_dir=td, cache_ttl_hours=24, core_request_interval=0)
+            cache_path = client._cache_path("https://api.github.com/rate_limit")
+            assert cache_path is not None
+            cache_path.write_text("{broken", encoding="utf-8")
+            calls = []
+            original_urlopen = github_api.urllib.request.urlopen
+            try:
+                def fake_urlopen(req, timeout=30):
+                    calls.append(req.full_url)
+                    return FakeResponse()
+                github_api.urllib.request.urlopen = fake_urlopen
+                self.assertEqual(client.get_json("/rate_limit"), {"ok": True})
+            finally:
+                github_api.urllib.request.urlopen = original_urlopen
+
+            self.assertEqual(calls, ["https://api.github.com/rate_limit"])
+            self.assertEqual(cache_path.read_text(encoding="utf-8"), '{\n  "ok": true\n}\n')
+            self.assertFalse(list(Path(td).glob("*.tmp")))
+
     def test_github_client_waits_and_retries_primary_rate_limit_once(self):
         import io
         import time
