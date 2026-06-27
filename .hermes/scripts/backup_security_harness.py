@@ -29,6 +29,7 @@ BLOCKED_PATH_RE = re.compile(
     r"\.env(?:\..*)?$|"
     r"\.git-credentials$|"
     r"auth\.json$|"
+    r"config\.yaml(?:\.bak.*)?$|"
     r"\.hermes/config\.yaml(?:\.bak.*)?$|"
     r"state\.db(?:[-\w.]*)?$|"
     r"kanban\.db(?:[-\w.]*)?$|"
@@ -115,6 +116,11 @@ def tracked_paths() -> list[str]:
 
 
 def path_is_blocked(path: str) -> bool:
+    allowed_config_paths = {
+        "repo-scout/config.yaml",
+    }
+    if path in allowed_config_paths:
+        return False
     # Some static-site outputs are durable published artifacts in this backup
     # repo, unlike generic package build directories. Exempt only their `dist/`
     # segment from the broad build-output rule; keep every other blocked-path
@@ -164,10 +170,33 @@ def read_text_for_scan(path: str) -> str | None:
     return data.decode("utf-8", errors="ignore")
 
 
-def scan_content(paths: Iterable[str]) -> list[str]:
+def read_staged_text_for_scan(path: str) -> str | None:
+    try:
+        meta = git(["cat-file", "-s", f":{path}"], check=False).strip()
+        if not meta or int(meta) > MAX_FILE_BYTES:
+            return None
+        proc = subprocess.run(
+            ["git", "show", f":{path}"],
+            cwd=REPO,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    data = proc.stdout
+    if b"\x00" in data[:4096]:
+        return None
+    return data.decode("utf-8", errors="ignore")
+
+
+def scan_content(paths: Iterable[str], *, staged: bool = False) -> list[str]:
     findings: list[str] = []
+    reader = read_staged_text_for_scan if staged else read_text_for_scan
     for path in sorted(set(paths)):
-        text = read_text_for_scan(path)
+        text = reader(path)
         if text is None:
             continue
         for name, pattern in SECRET_VALUE_RULES:
@@ -206,18 +235,21 @@ def main() -> int:
     include_staged = args.staged or args.all or not args.tracked
     include_tracked = args.tracked or args.all
 
+    staged_selected: set[str] = set(staged_paths()) if include_staged else set()
+    tracked_selected: set[str] = set(tracked_paths()) if include_tracked else set()
     selected: set[str] = set()
-    if include_staged:
-        selected.update(staged_paths())
-    if include_tracked:
-        selected.update(tracked_paths())
+    selected.update(staged_selected)
+    selected.update(tracked_selected)
 
     findings: list[str] = []
     for path in sorted(selected):
         if path_is_blocked(path):
             findings.append(f"{path}: blocked path")
 
-    findings.extend(scan_content(selected))
+    if staged_selected:
+        findings.extend(scan_content(staged_selected, staged=True))
+    if tracked_selected:
+        findings.extend(scan_content(tracked_selected, staged=False))
     findings.extend(scan_remote_urls())
 
     if findings:

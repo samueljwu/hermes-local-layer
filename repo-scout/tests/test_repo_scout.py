@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from repo_scout.api_budget import estimate_api_budget
-from repo_scout.cli import run_scout, resolve_output_dir
+from repo_scout.cli import DEFAULT_OUT_DIR, run_scout, resolve_feedback_path, resolve_output_dir
 from repo_scout.config import ScoutConfig, load_config
 from repo_scout.filters import has_min_commits_each_month, passes_hard_filters
 from repo_scout.feedback import load_feedback_profile, parse_feedback_args, record_feedback
@@ -136,6 +136,35 @@ class RepoScoutTests(unittest.TestCase):
         self.assertEqual(parsed["score"], 2)
         self.assertEqual(parsed["note"], "looks aligned")
         self.assertEqual(parse_feedback_args("summary")["command"], "summary")
+
+    def test_feedback_path_can_be_shared_under_canonical_out_dir(self):
+        out_dir = DEFAULT_OUT_DIR / "slash"
+        feedback_path = DEFAULT_OUT_DIR / "feedback.jsonl"
+        self.assertEqual(resolve_feedback_path(feedback_path, out_dir), feedback_path.resolve())
+
+    def test_record_feedback_uses_repo_scout_lock(self):
+        from repo_scout import feedback as feedback_mod
+
+        calls = []
+
+        class FakeLock:
+            def __enter__(self):
+                calls.append("enter")
+
+            def __exit__(self, exc_type, exc, tb):
+                calls.append("exit")
+                return False
+
+        old_lock = feedback_mod.repo_scout_lock
+        try:
+            feedback_mod.repo_scout_lock = lambda: FakeLock()
+            with tempfile.TemporaryDirectory() as td:
+                path = Path(td) / "feedback.jsonl"
+                record_feedback(path, full_name="owner/repo", score=1, created_at="2026-06-27T00:00:00+00:00")
+                self.assertEqual(calls, ["enter", "exit"])
+                self.assertEqual(load_feedback_profile(path)["count"], 1)
+        finally:
+            feedback_mod.repo_scout_lock = old_lock
 
     def test_interest_profile_reads_only_configured_roots(self):
         with tempfile.TemporaryDirectory() as td:

@@ -397,7 +397,25 @@ def feed_lock():
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+def assert_allowed_output_path(path: Path) -> None:
+    if path != OUTPUT_PATH:
+        raise RuntimeError(f'refusing to render feed page outside canonical output: {path}')
+    expected_parent = OUTPUT_PATH.parent
+    if not expected_parent.exists():
+        expected_parent.mkdir(parents=True, exist_ok=True)
+    if expected_parent.is_symlink():
+        raise RuntimeError(f'refusing to render through symlinked output directory: {expected_parent}')
+    try:
+        if expected_parent.resolve(strict=True) != expected_parent:
+            raise RuntimeError(f'refusing non-canonical feed output directory: {expected_parent}')
+    except FileNotFoundError as exc:
+        raise RuntimeError(f'missing feed output directory: {expected_parent}') from exc
+    if path.exists() and path.is_symlink():
+        raise RuntimeError(f'refusing to overwrite symlinked feed output file: {path}')
+
+
 def atomic_write_text(path: Path, text: str) -> None:
+    assert_allowed_output_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=str(path.parent))
     try:

@@ -40,13 +40,13 @@ def resolve_feedback_path(path: Path | None, out_dir: Path) -> Path | None:
         return None
     if not path.is_absolute():
         path = out_dir / path
-    return _require_under(path, out_dir, "Repo Scout feedback path")
+    return _require_under(path, DEFAULT_OUT_DIR, "Repo Scout feedback path")
 
 
 @contextmanager
 def _scout_lock(out_dir: Path):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = out_dir / ".repo-scout.lock"
+    DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = DEFAULT_OUT_DIR / ".repo-scout.lock"
     with lock_path.open("w", encoding="utf-8") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:

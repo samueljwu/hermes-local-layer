@@ -1,13 +1,30 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SCORE_RE = re.compile(r"^[+-]?[0-3]$")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUT_DIR = REPO_ROOT / "out"
+LOCK_PATH = DEFAULT_OUT_DIR / ".repo-scout.lock"
+
+
+@contextmanager
+def repo_scout_lock():
+    DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    with LOCK_PATH.open("w", encoding="utf-8") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _now_iso() -> str:
@@ -73,8 +90,11 @@ def record_feedback(
     }
     path = Path(feedback_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(item, sort_keys=True) + "\n")
+    with repo_scout_lock():
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(item, sort_keys=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
     return item
 
 

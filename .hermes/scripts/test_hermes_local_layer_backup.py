@@ -38,7 +38,7 @@ class LocalLayerBackupTests(unittest.TestCase):
             try:
                 mod_mut.SRC = src
                 mod_mut.WORK = work
-                included, omitted = mod.copy_filtered()
+                included, omitted = mod.copy_filtered(work)
             finally:
                 mod_mut.SRC = old_src
                 mod_mut.WORK = old_work
@@ -64,13 +64,32 @@ class LocalLayerBackupTests(unittest.TestCase):
             try:
                 mod_mut.WORK = work
                 with self.assertRaises(RuntimeError) as ctx:
-                    mod.verify_staged_tree()
+                    mod.verify_staged_tree(work)
             finally:
                 mod_mut.WORK = old_work
 
             message = str(ctx.exception)
             self.assertIn("README.md", message)
             self.assertNotIn(secret_value, message)
+    def test_verify_staged_tree_rejects_bare_provider_tokens(self):
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            subprocess.run(["git", "init"], cwd=work, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+            token = "github_pat_" + "A" * 44
+            path = work / "README.md"
+            path.write_text(f"Example copied token: {token}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=work, check=True)
+
+            with self.assertRaises(RuntimeError) as ctx:
+                mod.verify_staged_tree(work)
+
+            message = str(ctx.exception)
+            self.assertIn("github_pat", message)
+            self.assertIn("README.md", message)
+            self.assertNotIn(token, message)
 
 
 if __name__ == "__main__":

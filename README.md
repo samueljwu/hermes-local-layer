@@ -238,7 +238,12 @@ When changing harness behavior, schemas, hooks, cron jobs, routing, backup scope
 
 ## Backup automation
 
-Scheduled backup runs Wednesday and Sunday at 5:00 AM HKT.
+Scheduled private backup jobs currently run daily from the cron registry:
+
+- `Scheduled backup` (`scheduled_backup.sh`) at `0 20 * * *` UTC.
+- `Scheduled local-layer backup` (`hermes_local_layer_backup.py`) at `10 20 * * *` UTC.
+
+The weekly full-systems review is scheduled later on Saturdays (`0 23 * * 6` UTC) to avoid overlapping the git-mutating backup window.
 
 Commit message conventions:
 
