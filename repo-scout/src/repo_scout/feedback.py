@@ -66,6 +66,14 @@ def parse_feedback_args(raw_args: str) -> dict[str, Any]:
     return {"command": "record", "full_name": full_name, "score": score, "note": note}
 
 
+def _confine_feedback_path(feedback_path: str | Path) -> Path:
+    path = Path(feedback_path).expanduser().resolve()
+    out_root = DEFAULT_OUT_DIR.resolve()
+    if path != out_root and out_root not in path.parents:
+        raise ValueError(f"feedback path must stay under {out_root}: {path}")
+    return path
+
+
 def record_feedback(
     feedback_path: str | Path,
     *,
@@ -88,7 +96,7 @@ def record_feedback(
         "topics": [str(t).lower() for t in (topics or []) if str(t).strip()][:30],
         "language": str(language or "").strip() or None,
     }
-    path = Path(feedback_path)
+    path = _confine_feedback_path(feedback_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with repo_scout_lock():
         with path.open("a", encoding="utf-8") as f:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import fcntl
 import subprocess
 import tempfile
 import unittest
@@ -54,7 +55,7 @@ class LocalLayerBackupTests(unittest.TestCase):
             subprocess.run(["git", "init"], cwd=work, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
-            secret_value = "A" * 24
+            secret_value = "AbCDefghij" + ".KLmnopqr/STuvwxyz+123456789="
             path = work / "README.md"
             path.write_text(f"api_key = '{secret_value}'\n", encoding="utf-8")
             subprocess.run(["git", "add", "README.md"], cwd=work, check=True)
@@ -90,6 +91,51 @@ class LocalLayerBackupTests(unittest.TestCase):
             self.assertIn("github_pat", message)
             self.assertIn("README.md", message)
             self.assertNotIn(token, message)
+
+    def test_verify_staged_tree_rejects_slack_and_unquoted_secret_values(self):
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            subprocess.run(["git", "init"], cwd=work, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+            secret = "AbCDefghij" + ".KLmnopqr/STuvwxyz+123456789="
+            slack = "xoxb-" + "A" * 24
+            path = work / "README.md"
+            path.write_text(f"client_secret = {secret}\nslack token {slack}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=work, check=True)
+
+            with self.assertRaises(RuntimeError) as ctx:
+                mod.verify_staged_tree(work)
+
+            message = str(ctx.exception)
+            self.assertIn("README.md", message)
+            self.assertNotIn(secret, message)
+            self.assertNotIn(slack, message)
+
+    def test_backup_lock_defers_when_private_backup_lock_is_held(self):
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            local_lock = root / "local.lock"
+            private_lock = root / "private.lock"
+            old_local = mod.LOCK_PATH
+            old_private = mod.KNOWLEDGE_BACKUP_LOCK_PATH
+            mod_mut = cast(Any, mod)
+            try:
+                mod_mut.LOCK_PATH = local_lock
+                mod_mut.KNOWLEDGE_BACKUP_LOCK_PATH = private_lock
+                private_lock.parent.mkdir(parents=True, exist_ok=True)
+                with private_lock.open("w", encoding="utf-8") as held:
+                    fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    with self.assertRaises(RuntimeError) as ctx:
+                        with mod.backup_lock():
+                            pass
+                    self.assertIn("private Hermes knowledge backup", str(ctx.exception))
+                    fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+            finally:
+                mod_mut.LOCK_PATH = old_local
+                mod_mut.KNOWLEDGE_BACKUP_LOCK_PATH = old_private
 
 
 if __name__ == "__main__":

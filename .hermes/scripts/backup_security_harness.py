@@ -214,7 +214,10 @@ def scan_remote_urls() -> list[str]:
     findings: list[str] = []
     out = git(["remote", "-v"], check=False)
     for line in out.splitlines():
-        if re.search(r"https://[^\s/@:]+:[^\s/@]+@github\.com", line):
+        # Flag any HTTPS userinfo before github.com. Credentials can appear as
+        # either user:password or token-only userinfo (for example
+        # https://ghp_...@github.com/org/repo.git). Report only the remote name.
+        if re.search(r"https://[^\s/@]+@github\.com", line):
             name = line.split()[0] if line.split() else "remote"
             findings.append(f"git remote {name}: credential embedded in URL")
     return findings

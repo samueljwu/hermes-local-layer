@@ -50,6 +50,22 @@ class BackupSecurityHarnessTests(unittest.TestCase):
 
         self.assertEqual(findings, ['leak.txt: content rule github_pat'])
 
+    def test_remote_scan_flags_token_only_github_userinfo_without_echoing_value(self):
+        harness = load_harness()
+        token = 'ghp_' + 'A' * 36
+        old_git = getattr(harness, 'git')
+        try:
+            setattr(harness, 'git', lambda args, check=True: (
+                f"origin\thttps://{token}@github.com/org/repo.git (fetch)\n"
+                "safe\thttps://github.com/org/repo.git (fetch)\n"
+            ))
+            findings = harness.scan_remote_urls()
+        finally:
+            setattr(harness, 'git', old_git)
+
+        self.assertEqual(findings, ['git remote origin: credential embedded in URL'])
+        self.assertNotIn(token, '\n'.join(findings))
+
 
 if __name__ == '__main__':
     unittest.main()

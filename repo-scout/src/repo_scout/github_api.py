@@ -222,7 +222,13 @@ class GitHubClient:
         return self.cache_dir / f"{safe}.json"
 
     def get_json(self, path_or_url: str) -> Any:
-        url = path_or_url if path_or_url.startswith("http") else f"{GITHUB_API}{path_or_url}"
+        if path_or_url.startswith("http"):
+            parsed = urllib.parse.urlparse(path_or_url)
+            if parsed.scheme != "https" or parsed.netloc != "api.github.com":
+                raise ValueError("GitHubClient refuses non-api.github.com absolute URLs")
+            url = path_or_url
+        else:
+            url = f"{GITHUB_API}{path_or_url}"
         kind = _request_kind(path_or_url)
         cache_path = self._cache_path(url)
         if cache_path and cache_path.exists() and time.time() - cache_path.stat().st_mtime < self.cache_ttl:

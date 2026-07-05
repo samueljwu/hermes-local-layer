@@ -24,15 +24,25 @@ if str(ROOT / "scripts") not in sys.path:
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from build_chart_page import chart_asset_name, ensure_daily_price_file, read_csv, svg_chart  # noqa: E402
+from build_chart_page import (
+    DATA_PATTERNS,
+    SITE_DIST,
+    chart_asset_name,
+    ensure_daily_price_file,
+    ensure_owned_directory,
+    read_csv,
+    resolve_owned_output_path,
+    svg_chart,
+    write_text_atomic,
+)  # noqa: E402
 from stock_screener.patterns import read_price_csv, sma  # noqa: E402
 from stock_screener.symbols import normalize_symbol, safe_symbol_path  # noqa: E402
 
 PATTERN_CONFIG_PATH = ROOT / "config" / "patterns.json"
 CHART_CONFIG_PATH = ROOT / "config" / "chart_page.json"
-OUTPUT_HTML = ROOT / "site" / "dist" / "excluded.html"
-OUTPUT_SUMMARY = ROOT / "site" / "dist" / "excluded_summary.json"
-OUTPUT_SAMPLE = ROOT / "data" / "patterns" / "excluded_random_50.csv"
+OUTPUT_HTML = resolve_owned_output_path(SITE_DIST, "site/dist/excluded.html", allow_file=True)
+OUTPUT_SUMMARY = resolve_owned_output_path(SITE_DIST, "site/dist/excluded_summary.json", allow_file=True)
+OUTPUT_SAMPLE = resolve_owned_output_path(DATA_PATTERNS, "data/patterns/excluded_random_50.csv", allow_file=True)
 
 
 def read_universe(path: Path) -> dict[str, dict[str, str]]:
@@ -150,10 +160,10 @@ def write_sample(path: Path, scored_symbols: list[tuple[str, float]], seed: int,
 
 
 def render_page(scored_symbols: list[tuple[str, float]], seed: int, pattern_config: dict, chart_config: dict) -> dict:
-    output_dir = ROOT / chart_config["output_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
-    chart_asset_dir = output_dir / "excluded-charts"
-    chart_asset_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = resolve_owned_output_path(SITE_DIST, chart_config["output_dir"])
+    ensure_owned_directory(output_dir)
+    chart_asset_dir = resolve_owned_output_path(SITE_DIST, Path(chart_config["output_dir"]) / "excluded-charts")
+    ensure_owned_directory(chart_asset_dir)
     for old_svg in chart_asset_dir.glob("*.svg"):
         old_svg.unlink()
     price_dir = ROOT / chart_config["price_dir"]
@@ -172,7 +182,7 @@ def render_page(scored_symbols: list[tuple[str, float]], seed: int, pattern_conf
             lookback = min(int(chart_config.get("lookback_days", 260)), len(rows))
             svg = svg_chart(symbol, rows, "excluded_non_candidate", {}, lookback)
             svg_name = chart_asset_name(idx, symbol)
-            (chart_asset_dir / svg_name).write_text(svg, encoding="utf-8")
+            write_text_atomic(chart_asset_dir / svg_name, svg)
             chart_url = f"/stocks/excluded-charts/{svg_name}"
         except (OSError, ValueError, KeyError) as e:
             skipped.append({"symbol": symbol, "reason": f"{type(e).__name__}: {e}"})
@@ -237,7 +247,7 @@ a { color: #93c5fd; }
     <h1>Stock Screener</h1>
     <nav class="subnav" aria-label="Stock Screener pages"><a href="/stocks/">Interesting</a><span class="active">Meh</span></nav>
     <div class="meta">Meh sample. Seed: {seed}. Generated: {generated}.</div>
-    <div class="meta">Candles: daily OHLCV. SMA20d yellow, SMA50d blue, SMA200d orange. White dotted line: latest close.</div>
+    <div class="meta">Candles: fresh daily OHLCV when available; otherwise validated weekly fallback. SMA windows follow the rendered bar interval. White dotted line: latest close.</div>
   </section>
 </header>
 <main class="grid">
@@ -246,7 +256,7 @@ a { color: #93c5fd; }
 </body>
 </html>
 """
-    OUTPUT_HTML.write_text(doc, encoding="utf-8")
+    write_text_atomic(OUTPUT_HTML, doc)
     return {
         "generated_at_utc": generated,
         "sample_seed": seed,
@@ -268,7 +278,7 @@ def main() -> int:
     write_sample(OUTPUT_SAMPLE, sampled, seed, universe)
     summary = render_page(sampled, seed, pattern_config, chart_config)
     summary.update(stats)
-    OUTPUT_SUMMARY.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_text_atomic(OUTPUT_SUMMARY, json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

@@ -84,26 +84,36 @@ class RepoScoutTests(unittest.TestCase):
         self.assertIn("contribution_labels", ranked["reasons"])
 
     def test_feedback_records_affect_repo_and_topic_scores(self):
+        from repo_scout import feedback as feedback_mod
+
         with tempfile.TemporaryDirectory() as td:
-            feedback_path = Path(td) / "feedback.jsonl"
-            record_feedback(
-                feedback_path,
-                full_name="owner/good",
-                score=2,
-                note="useful",
-                topics=["llm", "agents"],
-                language="Python",
-                created_at="2026-05-10T00:00:00+00:00",
-            )
-            record_feedback(
-                feedback_path,
-                full_name="owner/bad",
-                score=-1,
-                note="too big",
-                topics=["enterprise"],
-                language="Java",
-                created_at="2026-05-10T00:00:01+00:00",
-            )
+            old_default_out = feedback_mod.DEFAULT_OUT_DIR
+            old_lock_path = feedback_mod.LOCK_PATH
+            feedback_mod.DEFAULT_OUT_DIR = Path(td) / "out"
+            feedback_mod.LOCK_PATH = feedback_mod.DEFAULT_OUT_DIR / ".repo-scout.lock"
+            feedback_path = feedback_mod.DEFAULT_OUT_DIR / "feedback.jsonl"
+            try:
+                record_feedback(
+                    feedback_path,
+                    full_name="owner/good",
+                    score=2,
+                    note="useful",
+                    topics=["llm", "agents"],
+                    language="Python",
+                    created_at="2026-05-10T00:00:00+00:00",
+                )
+                record_feedback(
+                    feedback_path,
+                    full_name="owner/bad",
+                    score=-1,
+                    note="too big",
+                    topics=["enterprise"],
+                    language="Java",
+                    created_at="2026-05-10T00:00:01+00:00",
+                )
+            finally:
+                feedback_mod.DEFAULT_OUT_DIR = old_default_out
+                feedback_mod.LOCK_PATH = old_lock_path
             feedback = load_feedback_profile(feedback_path)
             good = rank_repo(
                 {"full_name": "owner/good", "topics": ["llm"], "language": "Python", "stargazers_count": 10, "open_issues_count": 3},
@@ -142,6 +152,13 @@ class RepoScoutTests(unittest.TestCase):
         feedback_path = DEFAULT_OUT_DIR / "feedback.jsonl"
         self.assertEqual(resolve_feedback_path(feedback_path, out_dir), feedback_path.resolve())
 
+    def test_record_feedback_rejects_paths_outside_canonical_out_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            outside = Path(td) / "feedback.jsonl"
+            with self.assertRaises(ValueError):
+                record_feedback(outside, full_name="owner/repo", score=1, created_at="2026-06-27T00:00:00+00:00")
+            self.assertFalse(outside.exists())
+
     def test_record_feedback_uses_repo_scout_lock(self):
         from repo_scout import feedback as feedback_mod
 
@@ -159,8 +176,16 @@ class RepoScoutTests(unittest.TestCase):
         try:
             feedback_mod.repo_scout_lock = lambda: FakeLock()
             with tempfile.TemporaryDirectory() as td:
-                path = Path(td) / "feedback.jsonl"
-                record_feedback(path, full_name="owner/repo", score=1, created_at="2026-06-27T00:00:00+00:00")
+                old_default_out = feedback_mod.DEFAULT_OUT_DIR
+                old_lock_path = feedback_mod.LOCK_PATH
+                feedback_mod.DEFAULT_OUT_DIR = Path(td) / "out"
+                feedback_mod.LOCK_PATH = feedback_mod.DEFAULT_OUT_DIR / ".repo-scout.lock"
+                path = feedback_mod.DEFAULT_OUT_DIR / "feedback.jsonl"
+                try:
+                    record_feedback(path, full_name="owner/repo", score=1, created_at="2026-06-27T00:00:00+00:00")
+                finally:
+                    feedback_mod.DEFAULT_OUT_DIR = old_default_out
+                    feedback_mod.LOCK_PATH = old_lock_path
                 self.assertEqual(calls, ["enter", "exit"])
                 self.assertEqual(load_feedback_profile(path)["count"], 1)
         finally:
@@ -310,6 +335,28 @@ class RepoScoutTests(unittest.TestCase):
             self.assertEqual(calls, ["https://api.github.com/rate_limit"])
             self.assertEqual(cache_path.read_text(encoding="utf-8"), '{\n  "ok": true\n}\n')
             self.assertFalse(list(Path(td).glob("*.tmp")))
+
+    def test_github_client_rejects_non_github_absolute_urls_before_auth_header(self):
+        import os
+        from repo_scout import github_api
+
+        calls = []
+        old_token = os.environ.get("GITHUB_TOKEN")
+        original_urlopen = github_api.urllib.request.urlopen
+        try:
+            os.environ["GITHUB_TOKEN"] = "test-token"
+            github_api.urllib.request.urlopen = lambda req, timeout=30: calls.append(req)
+            client = GitHubClient(cache_dir=None, core_request_interval=0)
+            with self.assertRaises(ValueError):
+                client.get_json("https://example.com/rate_limit")
+        finally:
+            github_api.urllib.request.urlopen = original_urlopen
+            if old_token is None:
+                os.environ.pop("GITHUB_TOKEN", None)
+            else:
+                os.environ["GITHUB_TOKEN"] = old_token
+
+        self.assertEqual(calls, [])
 
     def test_github_client_waits_and_retries_primary_rate_limit_once(self):
         import io

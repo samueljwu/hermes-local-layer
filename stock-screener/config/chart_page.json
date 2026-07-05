@@ -8,7 +8,7 @@
   "lookback_days": 260,
   "daily_history_years": 2,
   "daily_cache_fresh_days": 5,
-  "fetch_missing_daily": true,
+  "fetch_missing_daily": false,
   "random_seed": null,
   "title": "Stock Screener"
 }

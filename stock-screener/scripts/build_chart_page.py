@@ -25,6 +25,41 @@ sys.path.insert(0, str(ROOT / "src"))
 from stock_screener.price_history import fetch_symbol_with_retries, is_cache_fresh
 
 CONFIG_PATH = ROOT / "config/chart_page.json"
+SITE_DIST = (ROOT / "site" / "dist").resolve()
+DATA_PATTERNS = (ROOT / "data" / "patterns").resolve()
+
+
+def resolve_owned_output_path(base: Path, configured: str | Path, *, allow_file: bool = False) -> Path:
+    candidate = Path(configured)
+    if candidate.is_absolute():
+        raise ValueError(f"absolute output path is not allowed: {candidate}")
+    resolved = (ROOT / candidate).resolve()
+    base_resolved = base.resolve()
+    allowed = resolved == base_resolved or base_resolved in resolved.parents
+    if not allowed:
+        raise ValueError(f"output path escapes {base_resolved}: {resolved}")
+    probe = resolved.parent if allow_file else resolved
+    for parent in [probe, *probe.parents]:
+        if parent == ROOT.resolve().parent:
+            break
+        if parent.exists() and parent.is_symlink():
+            raise ValueError(f"refusing symlinked output path: {parent}")
+    return resolved
+
+
+def ensure_owned_directory(path: Path) -> Path:
+    if path.exists() and path.is_symlink():
+        raise ValueError(f"refusing symlinked output directory: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise ValueError(f"refusing symlinked output directory: {path}")
+    return path
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def chart_asset_name(index: int, symbol: str) -> str:
@@ -201,7 +236,7 @@ def svg_chart(symbol: str, rows: list[dict[str, str]], pattern: str, evidence: d
 def ensure_daily_price_file(symbol: str, path: Path, config: dict) -> tuple[Path | None, str]:
     if is_cache_fresh(path, int(config.get("daily_cache_fresh_days", 5)), 200):
         return path, "daily_cached"
-    if config.get("fetch_missing_daily", True):
+    if config.get("fetch_missing_daily", False):
         result = fetch_symbol_with_retries(
             symbol=symbol,
             output_dir=path.parent,
@@ -223,10 +258,10 @@ def ensure_daily_price_file(symbol: str, path: Path, config: dict) -> tuple[Path
 
 
 def build_page(config: dict, sampled: list[dict[str, str]], seed: int) -> dict:
-    output_dir = ROOT / config["output_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
-    chart_asset_dir = output_dir / "charts"
-    chart_asset_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = resolve_owned_output_path(SITE_DIST, config["output_dir"])
+    ensure_owned_directory(output_dir)
+    chart_asset_dir = resolve_owned_output_path(SITE_DIST, Path(config["output_dir"]) / "charts")
+    ensure_owned_directory(chart_asset_dir)
     for old_svg in chart_asset_dir.glob("*.svg"):
         old_svg.unlink()
     price_dir = ROOT / config["price_dir"]
@@ -247,7 +282,7 @@ def build_page(config: dict, sampled: list[dict[str, str]], seed: int) -> dict:
             lookback = min(int(config.get("lookback_days", config.get("lookback_weeks", 260))), len(rows))
             svg = svg_chart(symbol, rows, match["pattern"], evidence, lookback)
             svg_name = chart_asset_name(idx, symbol)
-            (chart_asset_dir / svg_name).write_text(svg, encoding="utf-8")
+            write_text_atomic(chart_asset_dir / svg_name, svg)
             chart_url = f"/stocks/charts/{svg_name}"
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
             skipped.append({"symbol": symbol, "reason": f"{type(e).__name__}: {e}"})
@@ -321,7 +356,7 @@ a { color: #93c5fd; }
     <h1>Stock Screener</h1>
     <nav class="subnav" aria-label="Stock Screener pages"><span class="active">Interesting</span><a href="/stocks/excluded.html">Meh</a></nav>
     <div class="meta">Generated: {generated}. Seed/order: {seed}. Source: {html.escape(config['matches_path'])}.</div>
-    <div class="meta">Candles: daily OHLCV. SMA20d yellow, SMA50d blue, SMA200d orange. White dotted line: latest close. Dashed colored line: detected pattern reference level.</div>
+    <div class="meta">Candles: fresh daily OHLCV when available; otherwise validated weekly fallback. SMA windows follow the rendered bar interval. White dotted line: latest close. Dashed colored line: detected pattern reference level.</div>
   </section>
 </header>
 <main class="grid">
@@ -330,7 +365,7 @@ a { color: #93c5fd; }
 </body>
 </html>
 """
-    (output_dir / "index.html").write_text(doc, encoding="utf-8")
+    write_text_atomic(output_dir / "index.html", doc)
     return {"generated_at_utc": generated, "sample_seed": seed, "sampled_matches": len(sampled), "rendered_charts": len(cards), "price_sources": price_sources, "skipped_missing_prices": skipped, "output_path": str(output_dir / "index.html")}
 
 
@@ -338,12 +373,13 @@ def main() -> int:
     config = read_config()
     matches = read_csv(ROOT / config["matches_path"])
     sampled, seed = sample_matches(matches, config.get("sample_size", 50), config.get("random_seed"))
-    write_shortlist(ROOT / config["shortlist_path"], sampled, seed)
+    shortlist_path = resolve_owned_output_path(DATA_PATTERNS, config["shortlist_path"], allow_file=True)
+    write_shortlist(shortlist_path, sampled, seed)
     summary = build_page(config, sampled, seed)
     summary["shortlist_path"] = config["shortlist_path"]
     summary["matches_available"] = len(matches)
-    summary_path = ROOT / config["output_dir"] / "summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    summary_path = resolve_owned_output_path(SITE_DIST, Path(config["output_dir"]) / "summary.json", allow_file=True)
+    write_text_atomic(summary_path, json.dumps(summary, indent=2, sort_keys=True))
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

@@ -21,10 +21,16 @@ patterns = [
     r'\bgh[pousr]_[A-Za-z0-9_]{20,}\b',
     r'\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b',
     r'\bsk-ant-[A-Za-z0-9_-]{20,}\b',
+    r'\bxox[baprs]-[A-Za-z0-9-]{20,}\b',
+    r'\b[MN][A-Za-z\d_-]{23,27}\.[A-Za-z\d_-]{6}\.[A-Za-z\d_-]{25,45}\b',
+    r'\bAKIA[0-9A-Z]{16}\b',
+    r'-----BEGIN (?:RSA |DSA |EC |OPENSSH |)PRIVATE KEY-----.*?-----END (?:RSA |DSA |EC |OPENSSH |)PRIVATE KEY-----',
+    r'(?i)\b(?:api[_-]?key|token|secret|password|passwd|private[_-]?key|client[_-]?secret)\b\s*[:=]\s*["\']?(?!REDACTED\b|redacted\b|xxxx|xxx|example\b|placeholder\b|<[^>]+>|\$\{[^}]+\})[A-Za-z0-9_./+=:@%!-]{20,}',
     r'https://([^\s/:@]+):([^\s/@]+)@github\.com',
+    r'https://([^\s/@]+)@github\.com',
 ]
 for pat in patterns:
-    text = re.sub(pat, '[REDACTED]', text)
+    text = re.sub(pat, '[REDACTED]', text, flags=re.DOTALL)
 print(text.strip() or '(no output)')
 PY
 }

@@ -40,6 +40,21 @@ class FeedValidateReadonlyTests(unittest.TestCase):
             self.assertFalse((root / "_meta" / "source_state.json").exists())
             self.assertFalse((root / "runs").exists())
 
+    def test_feed_root_override_cannot_target_other_home_systems(self):
+        old = os.environ.get("HERMES_FEED_ROOT")
+        os.environ["HERMES_FEED_ROOT"] = "/home/hermes/wiki"
+        try:
+            spec = importlib.util.spec_from_file_location("feed_ops_bad_root_test", FEED_OPS)
+            assert spec and spec.loader
+            module = importlib.util.module_from_spec(spec)
+            with self.assertRaises(RuntimeError):
+                spec.loader.exec_module(module)
+        finally:
+            if old is None:
+                os.environ.pop("HERMES_FEED_ROOT", None)
+            else:
+                os.environ["HERMES_FEED_ROOT"] = old
+
 
 if __name__ == "__main__":
     unittest.main()
