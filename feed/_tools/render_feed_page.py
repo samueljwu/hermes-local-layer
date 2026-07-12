@@ -401,8 +401,18 @@ def assert_allowed_output_path(path: Path) -> None:
     if path != OUTPUT_PATH:
         raise RuntimeError(f'refusing to render feed page outside canonical output: {path}')
     expected_parent = OUTPUT_PATH.parent
+    existing_ancestor = expected_parent.parent
+    if not existing_ancestor.exists():
+        raise RuntimeError(f'missing feed output ancestor directory: {existing_ancestor}')
+    if existing_ancestor.is_symlink():
+        raise RuntimeError(f'refusing to render through symlinked output ancestor: {existing_ancestor}')
+    try:
+        if existing_ancestor.resolve(strict=True) != existing_ancestor:
+            raise RuntimeError(f'refusing non-canonical feed output ancestor: {existing_ancestor}')
+    except FileNotFoundError as exc:
+        raise RuntimeError(f'missing feed output ancestor directory: {existing_ancestor}') from exc
     if not expected_parent.exists():
-        expected_parent.mkdir(parents=True, exist_ok=True)
+        expected_parent.mkdir(parents=False, exist_ok=True)
     if expected_parent.is_symlink():
         raise RuntimeError(f'refusing to render through symlinked output directory: {expected_parent}')
     try:

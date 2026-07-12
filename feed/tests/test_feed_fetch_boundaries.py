@@ -165,3 +165,49 @@ def test_extractor_rejects_oversized_response(monkeypatch):
         assert 'larger than 10 bytes' in str(exc)
     else:  # pragma: no cover
         raise AssertionError('oversized response should be rejected')
+
+
+def test_feed_ops_connects_to_prevalidated_ip_not_hostname(monkeypatch):
+    feed_ops = load_module(FEED_OPS, 'feed_ops_dns_pin_boundary_test')
+    connected = []
+    monkeypatch.setattr(
+        feed_ops.socket,
+        'getaddrinfo',
+        lambda *args, **kwargs: [(feed_ops.socket.AF_INET, feed_ops.socket.SOCK_STREAM, 6, '', ('93.184.216.34', 80))],
+    )
+
+    def fake_create_connection(address, timeout=None):
+        connected.append(address)
+        raise OSError('stop before network response parse')
+
+    monkeypatch.setattr(feed_ops.socket, 'create_connection', fake_create_connection)
+    try:
+        feed_ops.urlopen_text('http://example.com/feed')
+    except OSError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError('fake connection should stop the fetch')
+    assert connected == [('93.184.216.34', 80)]
+
+
+def test_extractor_connects_to_prevalidated_ip_not_hostname(monkeypatch):
+    extractors = load_module(EXTRACTOR, 'site_feed_extractors_dns_pin_boundary_test')
+    connected = []
+    monkeypatch.setattr(
+        extractors.socket,
+        'getaddrinfo',
+        lambda *args, **kwargs: [(extractors.socket.AF_INET, extractors.socket.SOCK_STREAM, 6, '', ('93.184.216.34', 80))],
+    )
+
+    def fake_create_connection(address, timeout=None):
+        connected.append(address)
+        raise OSError('stop before network response parse')
+
+    monkeypatch.setattr(extractors.socket, 'create_connection', fake_create_connection)
+    try:
+        extractors.urlopen_text('http://example.com/feed')
+    except OSError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError('fake connection should stop the fetch')
+    assert connected == [('93.184.216.34', 80)]
