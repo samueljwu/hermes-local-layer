@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name('journal_ops.py')
@@ -94,6 +95,33 @@ def test_unsafe_journal_entry_id_rejected_for_path(tmp_path):
         assert 'unsafe journal entry id' in str(exc)
     else:
         raise AssertionError('unsafe journal id was not rejected')
+
+
+def test_noncanonical_journal_root_env_requires_explicit_allow(tmp_path):
+    root = tmp_path / 'other-journal'
+    root.mkdir()
+    old_root = os.environ.get('JOURNAL_ROOT')
+    old_allow = os.environ.get(journal_ops.ALLOW_NONCANONICAL_ROOTS_ENV)
+    try:
+        os.environ['JOURNAL_ROOT'] = str(root)
+        os.environ.pop(journal_ops.ALLOW_NONCANONICAL_ROOTS_ENV, None)
+        try:
+            journal_ops.resolve_journal_root()
+        except SystemExit as exc:
+            assert 'Refusing non-canonical JOURNAL_ROOT' in str(exc)
+        else:
+            raise AssertionError('non-canonical JOURNAL_ROOT was not rejected')
+        os.environ[journal_ops.ALLOW_NONCANONICAL_ROOTS_ENV] = '1'
+        assert journal_ops.resolve_journal_root() == root
+    finally:
+        if old_root is None:
+            os.environ.pop('JOURNAL_ROOT', None)
+        else:
+            os.environ['JOURNAL_ROOT'] = old_root
+        if old_allow is None:
+            os.environ.pop(journal_ops.ALLOW_NONCANONICAL_ROOTS_ENV, None)
+        else:
+            os.environ[journal_ops.ALLOW_NONCANONICAL_ROOTS_ENV] = old_allow
 
 
 if __name__ == '__main__':

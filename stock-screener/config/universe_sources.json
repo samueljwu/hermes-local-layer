@@ -44,5 +44,10 @@
       "-R",
       "-P"
     ]
+  },
+  "minimum_counts": {
+    "nasdaq_raw": 1000,
+    "nyse_raw_xnys": 1000,
+    "combined_active": 2000
   }
 }

@@ -30,8 +30,36 @@ WRITE_PROHIBITION = (
 )
 
 
-DEFAULT_WIKI_ROOT = Path(os.environ.get("WIKI_ROOT", "/home/hermes/wiki"))
-DEFAULT_WIKI_SRC = Path(os.environ.get("WIKI_SRC", str(DEFAULT_WIKI_ROOT / "src")))
+CANONICAL_WIKI_ROOT = Path("/home/hermes/wiki")
+CANONICAL_WIKI_SRC = CANONICAL_WIKI_ROOT / "src"
+ALLOW_NONCANONICAL_ROOTS_ENV = "HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS"
+
+
+def _resolve_default_wiki_paths() -> tuple[Path, Path]:
+    root = Path(os.environ.get("WIKI_ROOT", str(CANONICAL_WIKI_ROOT))).expanduser()
+    src = Path(os.environ.get("WIKI_SRC", str(root / "src"))).expanduser()
+    try:
+        root_resolved = root.resolve()
+        src_resolved = src.resolve()
+        canonical_root = CANONICAL_WIKI_ROOT.resolve()
+        canonical_src = CANONICAL_WIKI_SRC.resolve()
+    except OSError as exc:
+        raise SystemExit(f"Unable to resolve wiki root/src: {exc}") from exc
+    if os.environ.get(ALLOW_NONCANONICAL_ROOTS_ENV) != "1":
+        if root_resolved != canonical_root:
+            raise SystemExit(
+                f"Refusing non-canonical WIKI_ROOT {root_resolved}; set {ALLOW_NONCANONICAL_ROOTS_ENV}=1 only for tests/dev fixtures."
+            )
+        if src_resolved != canonical_src:
+            raise SystemExit(
+                f"Refusing non-canonical WIKI_SRC {src_resolved}; set {ALLOW_NONCANONICAL_ROOTS_ENV}=1 only for tests/dev fixtures."
+            )
+    if src_resolved != root_resolved and root_resolved not in src_resolved.parents:
+        raise SystemExit(f"Refusing WIKI_SRC outside WIKI_ROOT: {src_resolved}")
+    return root, src
+
+
+DEFAULT_WIKI_ROOT, DEFAULT_WIKI_SRC = _resolve_default_wiki_paths()
 
 
 def _resolve_wiki_page(path_from_query: str, wiki_root: Path, wiki_src: Path) -> Path | None:

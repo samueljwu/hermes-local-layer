@@ -30,6 +30,7 @@ from build_chart_page import (
     chart_asset_name,
     ensure_daily_price_file,
     ensure_owned_directory,
+    publish_html_with_assets,
     read_csv,
     resolve_owned_output_path,
     svg_chart,
@@ -163,9 +164,11 @@ def render_page(scored_symbols: list[tuple[str, float]], seed: int, pattern_conf
     output_dir = resolve_owned_output_path(SITE_DIST, chart_config["output_dir"])
     ensure_owned_directory(output_dir)
     chart_asset_dir = resolve_owned_output_path(SITE_DIST, Path(chart_config["output_dir"]) / "excluded-charts")
-    ensure_owned_directory(chart_asset_dir)
-    for old_svg in chart_asset_dir.glob("*.svg"):
-        old_svg.unlink()
+    chart_staging_dir = resolve_owned_output_path(SITE_DIST, Path(chart_config["output_dir"]) / ".excluded-charts.tmp")
+    if chart_staging_dir.exists():
+        import shutil
+        shutil.rmtree(chart_staging_dir)
+    ensure_owned_directory(chart_staging_dir)
     price_dir = ROOT / chart_config["price_dir"]
     cards = []
     skipped = []
@@ -182,7 +185,7 @@ def render_page(scored_symbols: list[tuple[str, float]], seed: int, pattern_conf
             lookback = min(int(chart_config.get("lookback_days", 260)), len(rows))
             svg = svg_chart(symbol, rows, "excluded_non_candidate", {}, lookback)
             svg_name = chart_asset_name(idx, symbol)
-            write_text_atomic(chart_asset_dir / svg_name, svg)
+            write_text_atomic(chart_staging_dir / svg_name, svg)
             chart_url = f"/stocks/excluded-charts/{svg_name}"
         except (OSError, ValueError, KeyError) as e:
             skipped.append({"symbol": symbol, "reason": f"{type(e).__name__}: {e}"})
@@ -256,7 +259,7 @@ a { color: #93c5fd; }
 </body>
 </html>
 """
-    write_text_atomic(OUTPUT_HTML, doc)
+    publish_html_with_assets(chart_staging_dir, chart_asset_dir, OUTPUT_HTML, doc)
     return {
         "generated_at_utc": generated,
         "sample_seed": seed,

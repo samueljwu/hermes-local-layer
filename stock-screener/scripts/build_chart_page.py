@@ -14,6 +14,7 @@ import json
 import math
 import random
 import re
+import shutil
 import time
 import sys
 from datetime import datetime, timezone
@@ -60,6 +61,44 @@ def write_text_atomic(path: Path, text: str) -> None:
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
+
+
+def promote_directory(staging_dir: Path, live_dir: Path) -> None:
+    """Replace a generated asset directory after a caller has finished staging."""
+    backup_dir = live_dir.with_name(f".{live_dir.name}.old")
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    if live_dir.exists():
+        live_dir.rename(backup_dir)
+    try:
+        staging_dir.rename(live_dir)
+    except Exception:
+        if backup_dir.exists() and not live_dir.exists():
+            backup_dir.rename(live_dir)
+        raise
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+
+
+def publish_html_with_assets(staging_dir: Path, live_dir: Path, html_path: Path, html_text: str) -> None:
+    """Atomically publish assets + HTML, rolling assets back if HTML promotion fails."""
+    backup_dir = live_dir.with_name(f".{live_dir.name}.old")
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    if live_dir.exists():
+        live_dir.rename(backup_dir)
+    try:
+        staging_dir.rename(live_dir)
+        write_text_atomic(html_path, html_text)
+    except Exception:
+        if live_dir.exists():
+            shutil.rmtree(live_dir)
+        if backup_dir.exists():
+            backup_dir.rename(live_dir)
+        raise
+    else:
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
 
 
 def chart_asset_name(index: int, symbol: str) -> str:
@@ -261,9 +300,10 @@ def build_page(config: dict, sampled: list[dict[str, str]], seed: int) -> dict:
     output_dir = resolve_owned_output_path(SITE_DIST, config["output_dir"])
     ensure_owned_directory(output_dir)
     chart_asset_dir = resolve_owned_output_path(SITE_DIST, Path(config["output_dir"]) / "charts")
-    ensure_owned_directory(chart_asset_dir)
-    for old_svg in chart_asset_dir.glob("*.svg"):
-        old_svg.unlink()
+    chart_staging_dir = resolve_owned_output_path(SITE_DIST, Path(config["output_dir"]) / ".charts.tmp")
+    if chart_staging_dir.exists():
+        shutil.rmtree(chart_staging_dir)
+    ensure_owned_directory(chart_staging_dir)
     price_dir = ROOT / config["price_dir"]
     cards = []
     skipped = []
@@ -282,7 +322,7 @@ def build_page(config: dict, sampled: list[dict[str, str]], seed: int) -> dict:
             lookback = min(int(config.get("lookback_days", config.get("lookback_weeks", 260))), len(rows))
             svg = svg_chart(symbol, rows, match["pattern"], evidence, lookback)
             svg_name = chart_asset_name(idx, symbol)
-            write_text_atomic(chart_asset_dir / svg_name, svg)
+            write_text_atomic(chart_staging_dir / svg_name, svg)
             chart_url = f"/stocks/charts/{svg_name}"
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
             skipped.append({"symbol": symbol, "reason": f"{type(e).__name__}: {e}"})
@@ -365,7 +405,7 @@ a { color: #93c5fd; }
 </body>
 </html>
 """
-    write_text_atomic(output_dir / "index.html", doc)
+    publish_html_with_assets(chart_staging_dir, chart_asset_dir, output_dir / "index.html", doc)
     return {"generated_at_utc": generated, "sample_seed": seed, "sampled_matches": len(sampled), "rendered_charts": len(cards), "price_sources": price_sources, "skipped_missing_prices": skipped, "output_path": str(output_dir / "index.html")}
 
 

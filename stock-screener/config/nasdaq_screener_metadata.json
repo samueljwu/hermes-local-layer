@@ -12,5 +12,12 @@
   "metadata_path": "data/metadata/processed/nasdaq_screener_metadata_refresh.json",
   "active_universe_path": "data/universe/processed/active_universe.csv",
   "max_source_age_hours": 72,
-  "allow_stale_cache_on_failure": true
+  "allow_stale_cache_on_failure": true,
+  "minimum_exchange_rows": {
+    "nasdaq": 1000,
+    "nyse": 1000,
+    "amex": 100
+  },
+  "minimum_total_metadata_rows": 2000,
+  "max_joined_missing_metadata_fraction": 0.95
 }

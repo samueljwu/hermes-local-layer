@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name('wiki_read_harness.py')
@@ -54,6 +55,40 @@ def test_semantic_plan_reads_prebuilt_artifacts_without_subprocess(tmp_path):
     assert plan['results'][0]['path'] == 'src/concepts/optical-test.md'
     assert 'src/concepts/neighbor-test.md' in plan['readThesePagesFirst']
     assert not hasattr(wiki_read_harness, 'subprocess')
+
+
+def test_noncanonical_wiki_env_requires_explicit_allow(tmp_path):
+    root = tmp_path / 'wiki'
+    src = root / 'src'
+    src.mkdir(parents=True)
+    old_root = os.environ.get('WIKI_ROOT')
+    old_src = os.environ.get('WIKI_SRC')
+    old_allow = os.environ.get(wiki_read_harness.ALLOW_NONCANONICAL_ROOTS_ENV)
+    try:
+        os.environ['WIKI_ROOT'] = str(root)
+        os.environ['WIKI_SRC'] = str(src)
+        os.environ.pop(wiki_read_harness.ALLOW_NONCANONICAL_ROOTS_ENV, None)
+        try:
+            wiki_read_harness._resolve_default_wiki_paths()
+        except SystemExit as exc:
+            assert 'Refusing non-canonical WIKI_ROOT' in str(exc)
+        else:
+            raise AssertionError('non-canonical WIKI_ROOT was not rejected')
+        os.environ[wiki_read_harness.ALLOW_NONCANONICAL_ROOTS_ENV] = '1'
+        assert wiki_read_harness._resolve_default_wiki_paths() == (root, src)
+    finally:
+        if old_root is None:
+            os.environ.pop('WIKI_ROOT', None)
+        else:
+            os.environ['WIKI_ROOT'] = old_root
+        if old_src is None:
+            os.environ.pop('WIKI_SRC', None)
+        else:
+            os.environ['WIKI_SRC'] = old_src
+        if old_allow is None:
+            os.environ.pop(wiki_read_harness.ALLOW_NONCANONICAL_ROOTS_ENV, None)
+        else:
+            os.environ[wiki_read_harness.ALLOW_NONCANONICAL_ROOTS_ENV] = old_allow
 
 
 if __name__ == '__main__':

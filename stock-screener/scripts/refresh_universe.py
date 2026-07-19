@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -211,16 +212,36 @@ def split_active_excluded(rows: Iterable[UniverseRow], config: dict) -> tuple[li
 def write_csv(path: Path, rows: Iterable[object]) -> int:
     rows = list(rows)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
     if not rows:
-        path.write_text("", encoding="utf-8")
+        tmp.write_text("", encoding="utf-8")
+        tmp.replace(path)
         return 0
     fieldnames = list(asdict(rows[0]).keys())
-    with path.open("w", newline="", encoding="utf-8") as f:
+    with tmp.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(asdict(row))
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
     return len(rows)
+
+
+def min_count(config: dict, key: str, default: int) -> int:
+    return int(config.get("minimum_counts", {}).get(key, default))
+
+
+def validate_refresh_counts(config: dict, counts: dict[str, int]) -> None:
+    required = {
+        "nasdaq_raw": min_count(config, "nasdaq_raw", 1000),
+        "nyse_raw_xnys": min_count(config, "nyse_raw_xnys", 1000),
+        "combined_active": min_count(config, "combined_active", 2000),
+    }
+    failures = [f"{key}={counts.get(key, 0)} < {minimum}" for key, minimum in required.items() if counts.get(key, 0) < minimum]
+    if failures:
+        raise RuntimeError("Refusing to promote sparse universe refresh: " + "; ".join(failures))
 
 
 def main() -> int:
@@ -241,11 +262,18 @@ def main() -> int:
         "nasdaq_raw": len(nasdaq_rows),
         "nyse_raw_all_markets": len(payload),
         "nyse_raw_xnys": len(nyse_rows),
+        "nasdaq_active": len(active_nasdaq),
+        "nyse_active": len(active_nyse),
+        "combined_active": len(active),
+        "excluded": len(excluded),
+    }
+    validate_refresh_counts(config, counts)
+    counts.update({
         "nasdaq_active": write_csv(PROCESSED_DIR / "nasdaq_universe.csv", active_nasdaq),
         "nyse_active": write_csv(PROCESSED_DIR / "nyse_universe.csv", active_nyse),
         "combined_active": write_csv(PROCESSED_DIR / "active_universe.csv", active),
         "excluded": write_csv(PROCESSED_DIR / "excluded_universe.csv", excluded),
-    }
+    })
 
     metadata = {
         "refreshed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -253,10 +281,13 @@ def main() -> int:
         "filters": config["filters"],
         "counts": counts,
     }
-    (PROCESSED_DIR / "universe_metadata.json").write_text(
+    metadata_path = PROCESSED_DIR / "universe_metadata.json"
+    tmp_metadata_path = metadata_path.with_name(f".{metadata_path.name}.tmp")
+    tmp_metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    tmp_metadata_path.replace(metadata_path)
 
     print(json.dumps(counts, indent=2, sort_keys=True))
     return 0

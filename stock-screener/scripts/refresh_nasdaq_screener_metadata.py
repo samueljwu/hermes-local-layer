@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -112,12 +113,23 @@ def nasdaq_api_url(config: dict, exchange: str) -> str:
     return f"{config['nasdaq_api_url']}?{urlencode(params)}"
 
 
+def min_exchange_rows(config: dict, exchange: str) -> int:
+    return int(config.get("minimum_exchange_rows", {}).get(exchange, 100))
+
+
+def validate_exchange_rows(config: dict, exchange: str, rows: list[dict], source: str) -> None:
+    minimum = min_exchange_rows(config, exchange)
+    if len(rows) < minimum:
+        raise RuntimeError(f"{source} returned too few {exchange} metadata rows: {len(rows)} < {minimum}")
+
+
 def load_exchange_from_github(config: dict, exchange: str, raw_dir: Path) -> tuple[list[dict], str, str]:
     url = github_raw_url(config, exchange)
     text = fetch_text(url)
     rows = json.loads(text)
     if not isinstance(rows, list):
         raise RuntimeError(f"GitHub source did not return a list for {exchange}")
+    validate_exchange_rows(config, exchange, rows, "github_raw")
     raw_path = raw_dir / f"{exchange}_github_full_tickers.json"
     raw_path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return rows, "github_raw", url
@@ -131,6 +143,7 @@ def load_exchange_from_nasdaq_api(config: dict, exchange: str, raw_dir: Path) ->
     rows = payload.get("data", {}).get("rows", [])
     if not isinstance(rows, list):
         raise RuntimeError(f"Nasdaq API source did not return rows list for {exchange}")
+    validate_exchange_rows(config, exchange, rows, "nasdaq_api")
     raw_path = raw_dir / f"{exchange}_nasdaq_api_full_tickers.json"
     raw_path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return rows, "nasdaq_api", url
@@ -206,15 +219,20 @@ def normalize_row(raw: dict, exchange: str, source: str) -> MetadataRow | None:
 def write_csv(path: Path, rows: Iterable[object]) -> int:
     rows = list(rows)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
     if not rows:
-        path.write_text("", encoding="utf-8")
+        tmp.write_text("", encoding="utf-8")
+        tmp.replace(path)
         return 0
     fieldnames = list(asdict(rows[0]).keys()) if hasattr(rows[0], "__dataclass_fields__") else list(rows[0].keys())
-    with path.open("w", newline="", encoding="utf-8") as f:
+    with tmp.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(asdict(row) if hasattr(row, "__dataclass_fields__") else row)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
     return len(rows)
 
 
@@ -293,14 +311,23 @@ def main() -> int:
                 all_rows.append(row)
 
     all_rows.sort(key=lambda r: (r.metadata_exchange, r.symbol))
-    metadata_count = write_csv(ROOT / config["processed_metadata_path"], all_rows)
-
+    if len(all_rows) < int(config.get("minimum_total_metadata_rows", 500)):
+        raise RuntimeError(f"Refusing to promote sparse metadata refresh: metadata_rows={len(all_rows)}")
     joined = join_to_active_universe(ROOT / config["active_universe_path"], all_rows)
+    joined_count = len(joined)
+    missing_count = sum(1 for row in joined if row.get("metadata_source") == "missing")
+    max_missing_fraction = float(config.get("max_joined_missing_metadata_fraction", 0.95))
+    missing_fraction = (missing_count / joined_count) if joined_count else 1.0
+    if joined_count == 0 or missing_fraction > max_missing_fraction:
+        raise RuntimeError(
+            f"Refusing to promote metadata refresh with missing metadata fraction {missing_fraction:.3f} > {max_missing_fraction:.3f}"
+        )
+
+    metadata_count = write_csv(ROOT / config["processed_metadata_path"], all_rows)
     joined_count = write_csv(ROOT / config["joined_universe_path"], joined)
     write_csv(ROOT / config["sector_summary_path"], summary_rows(joined, "sector"))
     write_csv(ROOT / config["industry_summary_path"], summary_rows(joined, "industry"))
     write_csv(ROOT / config["country_summary_path"], summary_rows(joined, "country"))
-    missing_count = sum(1 for row in joined if row.get("metadata_source") == "missing")
 
     metadata = {
         "refreshed_at_utc": utc_now().isoformat(),
@@ -322,7 +349,9 @@ def main() -> int:
     }
     metadata_path = ROOT / config["metadata_path"]
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_metadata_path = metadata_path.with_name(f".{metadata_path.name}.tmp")
+    tmp_metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_metadata_path.replace(metadata_path)
     print(json.dumps(metadata, indent=2, sort_keys=True))
     return 0 if missing_count < joined_count else 1
 
