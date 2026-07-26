@@ -66,6 +66,54 @@ class BackupSecurityHarnessTests(unittest.TestCase):
         self.assertEqual(findings, ['git remote origin: credential embedded in URL'])
         self.assertNotIn(token, '\n'.join(findings))
 
+    def test_durable_static_dist_allows_only_small_text_web_artifacts(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            html_path = repo / 'homepage/dist/index.html'
+            html_path.parent.mkdir(parents=True)
+            html_path.write_text('<!doctype html>\n', encoding='utf-8')
+            binary_path = repo / 'homepage/dist/leak.bin'
+            binary_path.write_bytes(b'\x00SECRET')
+            large_path = repo / 'stock-screener/site/dist/huge.svg'
+            large_path.parent.mkdir(parents=True)
+            large_path.write_bytes(b'a' * (harness.MAX_FILE_BYTES + 1))
+
+            old_repo = harness.REPO
+            try:
+                setattr(harness, 'REPO', repo)
+                self.assertIsNone(harness.durable_static_dist_issue('homepage/dist/index.html'))
+                self.assertEqual(
+                    harness.durable_static_dist_issue('homepage/dist/leak.bin'),
+                    'homepage/dist/leak.bin: durable static artifact extension not allowed',
+                )
+                self.assertEqual(
+                    harness.durable_static_dist_issue('stock-screener/site/dist/huge.svg'),
+                    'stock-screener/site/dist/huge.svg: durable static artifact too large',
+                )
+            finally:
+                setattr(harness, 'REPO', old_repo)
+
+    def test_durable_static_dist_rejects_symlink_artifact(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            target = repo / 'target.html'
+            target.write_text('ok\n', encoding='utf-8')
+            link = repo / 'homepage/dist/index.html'
+            link.parent.mkdir(parents=True)
+            link.symlink_to(target)
+
+            old_repo = harness.REPO
+            try:
+                setattr(harness, 'REPO', repo)
+                self.assertEqual(
+                    harness.durable_static_dist_issue('homepage/dist/index.html'),
+                    'homepage/dist/index.html: durable static artifact symlink not allowed',
+                )
+            finally:
+                setattr(harness, 'REPO', old_repo)
+
 
 if __name__ == '__main__':
     unittest.main()

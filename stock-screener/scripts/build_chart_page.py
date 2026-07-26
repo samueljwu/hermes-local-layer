@@ -26,8 +26,31 @@ sys.path.insert(0, str(ROOT / "src"))
 from stock_screener.price_history import fetch_symbol_with_retries, is_cache_fresh
 
 CONFIG_PATH = ROOT / "config/chart_page.json"
-SITE_DIST = (ROOT / "site" / "dist").resolve()
-DATA_PATTERNS = (ROOT / "data" / "patterns").resolve()
+SITE_DIST = ROOT / "site" / "dist"
+DATA_PATTERNS = ROOT / "data" / "patterns"
+
+
+def ensure_owned_base_dir(base: Path) -> Path:
+    """Resolve a trusted generated-output base and fail closed on symlinks.
+
+    Callers allow writes under only two stock-screener-owned trees. Do not make a
+    symlinked `site/dist` or `data/patterns` become the new trusted root.
+    """
+    raw_base = Path(base)
+    root_resolved = ROOT.resolve()
+    try:
+        raw_base.relative_to(ROOT)
+    except ValueError:
+        raise ValueError(f"output base is not under {ROOT}: {raw_base}")
+    for parent in [raw_base, *raw_base.parents]:
+        if parent == ROOT.parent:
+            break
+        if parent.exists() and parent.is_symlink():
+            raise ValueError(f"refusing symlinked output base: {parent}")
+    resolved = raw_base.resolve()
+    if not (resolved == root_resolved or root_resolved in resolved.parents):
+        raise ValueError(f"output base escapes {root_resolved}: {resolved}")
+    return resolved
 
 
 def resolve_owned_output_path(base: Path, configured: str | Path, *, allow_file: bool = False) -> Path:
@@ -35,7 +58,7 @@ def resolve_owned_output_path(base: Path, configured: str | Path, *, allow_file:
     if candidate.is_absolute():
         raise ValueError(f"absolute output path is not allowed: {candidate}")
     resolved = (ROOT / candidate).resolve()
-    base_resolved = base.resolve()
+    base_resolved = ensure_owned_base_dir(base)
     allowed = resolved == base_resolved or base_resolved in resolved.parents
     if not allowed:
         raise ValueError(f"output path escapes {base_resolved}: {resolved}")

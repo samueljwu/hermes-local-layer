@@ -19,6 +19,25 @@ from typing import Any
 DISCORD_API = "https://discord.com/api/v10"
 DEFAULT_ENV_PATH = Path.home() / ".hermes" / ".env"
 CHANNELS_PATH = Path.home() / ".hermes" / "local_channels.yaml"
+CANONICAL_TASKS_ROOT = Path("/home/hermes/tasks")
+
+
+def resolve_tasks_root() -> Path:
+    """Return the canonical local tasks root, failing closed on accidental drift.
+
+    Discord scripts/plugins are cross-system surfaces and must not silently read
+    a different registry if HOME or TASKS_ROOT is changed by cron/gateway env.
+    Test/dev fixtures may opt in explicitly with
+    HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS=1.
+    """
+    configured = Path(os.environ.get("TASKS_ROOT", str(CANONICAL_TASKS_ROOT))).expanduser().resolve()
+    canonical = CANONICAL_TASKS_ROOT.resolve()
+    if configured != canonical and os.environ.get("HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS") != "1":
+        raise RuntimeError(
+            f"Refusing non-canonical TASKS_ROOT {configured}; expected {canonical}. "
+            "Set HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS=1 only for tests/dev fixtures."
+        )
+    return configured
 
 
 def load_env_file(path: Path = DEFAULT_ENV_PATH) -> None:

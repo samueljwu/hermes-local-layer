@@ -22,6 +22,21 @@ from typing import Iterable
 
 REPO = Path("/home/hermes")
 MAX_FILE_BYTES = 2_000_000
+DURABLE_STATIC_DIST_PREFIXES = (
+    "homepage/dist/",
+    "stock-screener/site/dist/",
+)
+DURABLE_STATIC_ALLOWED_SUFFIXES = {
+    ".css",
+    ".html",
+    ".ico",
+    ".js",
+    ".json",
+    ".svg",
+    ".txt",
+    ".webmanifest",
+    ".xml",
+}
 
 BLOCKED_PATH_RE = re.compile(
     r"(^|/)("
@@ -125,15 +140,52 @@ def path_is_blocked(path: str) -> bool:
     # repo, unlike generic package build directories. Exempt only their `dist/`
     # segment from the broad build-output rule; keep every other blocked-path
     # rule active inside those trees (for example `.env`, keys, locks, pyc).
-    durable_static_dist_prefixes = (
-        "homepage/dist/",
-        "stock-screener/site/dist/",
-    )
-    for prefix in durable_static_dist_prefixes:
+    for prefix in DURABLE_STATIC_DIST_PREFIXES:
         if path.startswith(prefix):
             scrubbed = prefix.replace("dist/", "__durable_static_dist__/") + path[len(prefix):]
             return bool(BLOCKED_PATH_RE.search(scrubbed))
     return bool(BLOCKED_PATH_RE.search(path))
+
+
+def durable_static_dist_issue(path: str, *, staged: bool = False) -> str | None:
+    """Return a path-only finding for unsafe durable static-site artifacts.
+
+    The backup intentionally keeps a few generated public static trees. Those
+    exemptions must stay narrow: text-like web artifacts only, no symlinks, and
+    no oversized/binary blobs that would bypass content scanning.
+    """
+    if not any(path.startswith(prefix) for prefix in DURABLE_STATIC_DIST_PREFIXES):
+        return None
+    suffix = Path(path).suffix.lower()
+    if suffix not in DURABLE_STATIC_ALLOWED_SUFFIXES:
+        return f"{path}: durable static artifact extension not allowed"
+    try:
+        if staged:
+            meta = git(["ls-files", "--stage", "--", path], check=False).strip()
+            if meta.startswith("120000 "):
+                return f"{path}: durable static artifact symlink not allowed"
+            size = git(["cat-file", "-s", f":{path}"], check=False).strip()
+            if size and int(size) > MAX_FILE_BYTES:
+                return f"{path}: durable static artifact too large"
+            data = subprocess.run(
+                ["git", "show", f":{path}"],
+                cwd=REPO,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            ).stdout[:4096]
+        else:
+            full = REPO / path
+            if full.is_symlink():
+                return f"{path}: durable static artifact symlink not allowed"
+            if full.exists() and full.stat().st_size > MAX_FILE_BYTES:
+                return f"{path}: durable static artifact too large"
+            data = full.read_bytes()[:4096] if full.is_file() else b""
+    except (OSError, ValueError):
+        return f"{path}: durable static artifact unreadable"
+    if b"\x00" in data:
+        return f"{path}: durable static artifact binary content not allowed"
+    return None
 
 
 def entropy(s: str) -> float:
@@ -248,6 +300,9 @@ def main() -> int:
     for path in sorted(selected):
         if path_is_blocked(path):
             findings.append(f"{path}: blocked path")
+        issue = durable_static_dist_issue(path, staged=path in staged_selected)
+        if issue:
+            findings.append(issue)
 
     if staged_selected:
         findings.extend(scan_content(staged_selected, staged=True))
