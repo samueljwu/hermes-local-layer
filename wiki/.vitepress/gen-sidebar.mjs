@@ -8,7 +8,7 @@
  * Run in CI/build: node .vitepress/gen-sidebar.mjs && vitepress build .
  */
 
-import { readdir, stat, readFile } from 'fs/promises'
+import { readdir, lstat, readFile } from 'fs/promises'
 import { join, extname, basename } from 'path'
 import { existsSync, writeFileSync } from 'fs'
 
@@ -32,7 +32,8 @@ function walkDir(dir, baseDir = dir) {
       const fullPath = join(dir, entry)
       const relPath = fullPath.replace(baseDir + '/', '').replace(baseDir, '')
 
-      const s = await stat(fullPath)
+      const s = await lstat(fullPath)
+      if (s.isSymbolicLink()) throw new Error(`Refusing symlink in wiki source: ${fullPath}`)
       if (s.isDirectory()) {
         const children = await walkDir(fullPath, baseDir)
         if (children.length > 0) {
@@ -99,7 +100,8 @@ async function buildSidebar() {
   for (const entry of entries) {
     if (entry.startsWith('.') || entry === '_archive' || entry === '_meta') continue
     const fullPath = join(SRC, entry)
-    const s = await stat(fullPath)
+    const s = await lstat(fullPath)
+    if (s.isSymbolicLink()) throw new Error(`Refusing symlink in wiki source: ${fullPath}`)
 
     if (s.isDirectory()) {
       const children = await walkDir(fullPath, SRC)

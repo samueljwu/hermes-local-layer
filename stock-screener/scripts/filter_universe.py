@@ -9,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from stock_screener.owned_paths import resolve_owned_path
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "screener_filters.json"
 
@@ -128,7 +130,7 @@ def main() -> int:
         else:
             kept.append(row)
 
-    output_count = write_csv(ROOT / config["output_path"], kept)
+    output_count = write_csv(resolve_owned_path(ROOT, config["output_path"], label="output_path"), kept)
     summary = {
         "input_rows": len(rows),
         "output_rows": output_count,
@@ -137,7 +139,7 @@ def main() -> int:
         "output_path": config["output_path"],
         "config_path": str(CONFIG_PATH.relative_to(ROOT)),
     }
-    summary_path = ROOT / config["summary_path"]
+    summary_path = resolve_owned_path(ROOT, config["summary_path"], label="summary_path")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, sort_keys=True))

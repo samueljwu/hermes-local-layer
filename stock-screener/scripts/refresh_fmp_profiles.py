@@ -29,6 +29,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from stock_screener.symbols import normalize_symbol, safe_symbol_path
+from stock_screener.owned_paths import resolve_owned_path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "fmp_profile_refresh.json"
@@ -228,11 +229,11 @@ def main() -> int:
         return 2
 
     universe_path = ROOT / config["universe_path"]
-    raw_dir = ROOT / config["raw_profile_dir"]
-    processed_profiles_path = ROOT / config["processed_profiles_path"]
-    sector_summary_path = ROOT / config["sector_summary_path"]
-    industry_summary_path = ROOT / config["industry_summary_path"]
-    metadata_path = ROOT / config["metadata_path"]
+    raw_dir = resolve_owned_path(ROOT, config["raw_profile_dir"], label="raw_profile_dir")
+    processed_profiles_path = resolve_owned_path(ROOT, config["processed_profiles_path"], label="processed_profiles_path")
+    sector_summary_path = resolve_owned_path(ROOT, config["sector_summary_path"], label="sector_summary_path")
+    industry_summary_path = resolve_owned_path(ROOT, config["industry_summary_path"], label="industry_summary_path")
+    metadata_path = resolve_owned_path(ROOT, config["metadata_path"], label="metadata_path")
 
     universe = read_universe(universe_path)
     max_symbols = args.max_symbols if args.max_symbols is not None else config.get("max_symbols")

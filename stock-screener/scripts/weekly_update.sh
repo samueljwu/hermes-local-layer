@@ -27,7 +27,10 @@ cleanup_wiki_state() {
   rm -f "$wiki_state_before" "$wiki_state_after"
 }
 trap cleanup_wiki_state EXIT
-git -C /home/hermes status --porcelain=v1 --untracked-files=all -- wiki >"$wiki_state_before"
+# Snapshot protected wiki content (including ignored generated artifacts) before
+# the permitted deploy check. The manifest excludes node_modules but covers the
+# canonical source, generated site, harnesses, and build configuration.
+python3 scripts/wiki_readonly_manifest.py >"$wiki_state_before"
 
 set +e
 python3 scripts/refresh_price_history.py
@@ -70,9 +73,9 @@ PY
 
 cd /home/hermes/wiki
 /home/hermes/wiki/_tools/wiki_ops.py deploy-check >/tmp/stock_screener_wiki_deploy_check.json
-git -C /home/hermes status --porcelain=v1 --untracked-files=all -- wiki >"$wiki_state_after"
+python3 /home/hermes/stock-screener/scripts/wiki_readonly_manifest.py >"$wiki_state_after"
 if ! cmp -s "$wiki_state_before" "$wiki_state_after"; then
-  echo "ERROR: stock screener workflow changed git-visible wiki state; wiki access must remain read-only" >&2
+  echo "ERROR: stock screener workflow changed protected wiki content; wiki access must remain read-only" >&2
   diff -u "$wiki_state_before" "$wiki_state_after" >&2 || true
   exit 1
 fi

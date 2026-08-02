@@ -25,6 +25,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from stock_screener.owned_paths import resolve_owned_path
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "nasdaq_screener_metadata.json"
 
@@ -290,7 +292,7 @@ def summary_rows(rows: list[dict[str, str]], field: str) -> list[dict[str, str |
 
 def main() -> int:
     config = load_config()
-    raw_dir = ROOT / config["raw_dir"]
+    raw_dir = resolve_owned_path(ROOT, config["raw_dir"], label="raw_dir")
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     pushed_at = github_repo_pushed_at(config)
@@ -323,11 +325,11 @@ def main() -> int:
             f"Refusing to promote metadata refresh with missing metadata fraction {missing_fraction:.3f} > {max_missing_fraction:.3f}"
         )
 
-    metadata_count = write_csv(ROOT / config["processed_metadata_path"], all_rows)
-    joined_count = write_csv(ROOT / config["joined_universe_path"], joined)
-    write_csv(ROOT / config["sector_summary_path"], summary_rows(joined, "sector"))
-    write_csv(ROOT / config["industry_summary_path"], summary_rows(joined, "industry"))
-    write_csv(ROOT / config["country_summary_path"], summary_rows(joined, "country"))
+    metadata_count = write_csv(resolve_owned_path(ROOT, config["processed_metadata_path"], label="processed_metadata_path"), all_rows)
+    joined_count = write_csv(resolve_owned_path(ROOT, config["joined_universe_path"], label="joined_universe_path"), joined)
+    write_csv(resolve_owned_path(ROOT, config["sector_summary_path"], label="sector_summary_path"), summary_rows(joined, "sector"))
+    write_csv(resolve_owned_path(ROOT, config["industry_summary_path"], label="industry_summary_path"), summary_rows(joined, "industry"))
+    write_csv(resolve_owned_path(ROOT, config["country_summary_path"], label="country_summary_path"), summary_rows(joined, "country"))
 
     metadata = {
         "refreshed_at_utc": utc_now().isoformat(),
@@ -347,7 +349,7 @@ def main() -> int:
             "metadata_path": config["metadata_path"],
         },
     }
-    metadata_path = ROOT / config["metadata_path"]
+    metadata_path = resolve_owned_path(ROOT, config["metadata_path"], label="metadata_path")
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_metadata_path = metadata_path.with_name(f".{metadata_path.name}.tmp")
     tmp_metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")

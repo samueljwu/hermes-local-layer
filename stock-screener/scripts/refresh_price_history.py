@@ -29,6 +29,7 @@ from stock_screener.price_history import (  # noqa: E402
     read_symbols_from_filtered_universe,
     sleep_between_requests,
 )
+from stock_screener.owned_paths import resolve_owned_path  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "price_history.json"
 
@@ -68,10 +69,10 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config()
-    output_dir = ROOT / config["output_dir"]
-    metadata_path = ROOT / config["metadata_path"]
-    failures_path = ROOT / config["failures_path"]
-    progress_path = ROOT / config["progress_path"]
+    output_dir = resolve_owned_path(ROOT, config["output_dir"], label="output_dir")
+    metadata_path = resolve_owned_path(ROOT, config["metadata_path"], label="metadata_path")
+    failures_path = resolve_owned_path(ROOT, config["failures_path"], label="failures_path")
+    progress_path = resolve_owned_path(ROOT, config["progress_path"], label="progress_path")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.symbol:

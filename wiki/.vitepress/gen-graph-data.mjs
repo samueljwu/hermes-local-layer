@@ -9,7 +9,7 @@
  *   - frontmatter sources: sources: [raw/...]
  */
 
-import { readdirSync, statSync, readFileSync, mkdirSync, writeFileSync } from 'fs'
+import { readdirSync, lstatSync, readFileSync, mkdirSync, writeFileSync } from 'fs'
 import { resolve, relative, join, basename } from 'path'
 
 const ROOT = process.cwd()
@@ -24,7 +24,8 @@ function walkMdFiles(dir) {
   for (const entry of readdirSync(dir).sort()) {
     if (entry.startsWith('.') || SKIP_DIRS.has(entry)) continue
     const fullPath = join(dir, entry)
-    const stat = statSync(fullPath)
+    const stat = lstatSync(fullPath)
+    if (stat.isSymbolicLink()) throw new Error(`Refusing symlink in wiki source: ${fullPath}`)
     if (stat.isDirectory()) files.push(...walkMdFiles(fullPath))
     else if (stat.isFile() && entry.endsWith('.md')) files.push(fullPath)
   }

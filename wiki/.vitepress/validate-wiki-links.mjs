@@ -12,7 +12,7 @@
  * Exit code 1 if errors found, 0 if clean.
  */
 
-import { readdirSync, statSync, readFileSync } from 'fs'
+import { readdirSync, lstatSync, readFileSync } from 'fs'
 import { resolve, relative, join } from 'path'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
@@ -28,7 +28,8 @@ function discoverSlugs(dir) {
   const shortToFull = new Map()
   for (const entry of readdirSync(dir)) {
     const fullPath = join(dir, entry)
-    const stat = statSync(fullPath)
+    const stat = lstatSync(fullPath)
+    if (stat.isSymbolicLink()) throw new Error(`Refusing symlink in wiki source: ${fullPath}`)
     if (stat.isDirectory()) {
       const child = discoverSlugs(fullPath)
       for (const slug of child.slugs) slugs.add(slug)
@@ -75,7 +76,8 @@ const errors = []
 function scanDir(dir) {
   for (const entry of readdirSync(dir)) {
     const fullPath = join(dir, entry)
-    const stat = statSync(fullPath)
+    const stat = lstatSync(fullPath)
+    if (stat.isSymbolicLink()) throw new Error(`Refusing symlink in wiki source: ${fullPath}`)
     if (stat.isDirectory()) {
       scanDir(fullPath)
     } else if (entry.endsWith('.md')) {

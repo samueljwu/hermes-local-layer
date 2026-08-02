@@ -15,6 +15,7 @@ import refresh_nasdaq_screener_metadata as metadata_refresh  # noqa: E402
 import refresh_universe  # noqa: E402
 import build_chart_page  # noqa: E402
 from build_chart_page import promote_directory, publish_html_with_assets  # noqa: E402
+from stock_screener.owned_paths import resolve_owned_path  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,28 @@ class DummyRow:
 
 
 class RefreshSafetyTests(unittest.TestCase):
+    def test_configured_output_paths_must_remain_under_owned_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertEqual(
+                resolve_owned_path(root, "data/out.json", label="output"),
+                root / "data" / "out.json",
+            )
+            for unsafe in ("/tmp/out.json", "../out.json", "data/../out.json", ""):
+                with self.subTest(unsafe=unsafe):
+                    with self.assertRaises(ValueError):
+                        resolve_owned_path(root, unsafe, label="output")
+
+    def test_configured_output_paths_reject_symlink_escape(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "root"
+            outside = Path(td) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (root / "linked").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                resolve_owned_path(root, "linked/out.json", label="output")
+
     def test_universe_refresh_rejects_sparse_counts_before_promotion(self):
         with self.assertRaisesRegex(RuntimeError, "Refusing to promote sparse universe refresh"):
             refresh_universe.validate_refresh_counts(
