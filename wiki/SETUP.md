@@ -61,7 +61,7 @@ The build script runs, in order:
 4. `.vitepress/gen-semantic-graph.mjs`.
 5. `.vitepress/validate-semantic-relationships.mjs`.
 6. `vitepress build .`.
-7. Copies semantic, graph, KaTeX, and raw-asset public files into `dist/`.
+7. Copies semantic, graph, KaTeX, and raw-asset public files into `dist/`. Raw source evidence is copied from the *contents* of `src/raw/assets/` into `dist/raw/assets/`, so published `/wiki/raw/assets/...` URLs retain their source-relative paths without an extra `assets/` directory.
 
 The generated sidebar is rebuilt from the actual `src/` tree. Do not manually edit `.vitepress/_sidebar-generated.mjs`.
 
