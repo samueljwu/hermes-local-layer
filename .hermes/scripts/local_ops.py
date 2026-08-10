@@ -11,6 +11,8 @@ import json
 import os
 import tempfile
 import time
+import contextlib
+import fcntl
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -38,6 +40,19 @@ def resolve_tasks_root() -> Path:
             "Set HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS=1 only for tests/dev fixtures."
         )
     return configured
+
+
+@contextlib.contextmanager
+def tasks_lock(root: Path | None = None):
+    """Take the task-system lock shared by task_ops and operational consumers."""
+    lock_path = (root or resolve_tasks_root()) / "_meta" / ".task_ops.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def load_env_file(path: Path = DEFAULT_ENV_PATH) -> None:
@@ -105,6 +120,14 @@ def atomic_json_write(path: Path, payload: Any) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_name, path)
+        try:
+            dir_fd = os.open(path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
     finally:
         try:
             os.unlink(tmp_name)

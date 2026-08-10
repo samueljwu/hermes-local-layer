@@ -12,8 +12,14 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import re
+import sys
 
-REGISTRY_PATH = Path.home() / "tasks" / "_meta" / "task_registry.json"
+LOCAL_SCRIPTS = Path("/home/hermes/.hermes/scripts")
+if str(LOCAL_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(LOCAL_SCRIPTS))
+from local_ops import resolve_tasks_root  # noqa: E402
+
+REGISTRY_PATH = resolve_tasks_root() / "_meta" / "task_registry.json"
 LOCAL_TZ = ZoneInfo("Asia/Hong_Kong")
 LOCAL_TZ_LABEL = "HKT"
 

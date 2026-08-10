@@ -7,11 +7,17 @@ Discord #tasks; empty stdout stays silent.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-TASK_OPS_PATH = Path.home() / "tasks" / "_tools" / "task_ops.py"
+LOCAL_SCRIPTS = Path("/home/hermes/.hermes/scripts")
+if str(LOCAL_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(LOCAL_SCRIPTS))
+from local_ops import resolve_tasks_root  # noqa: E402
+
+TASK_OPS_PATH = resolve_tasks_root() / "_tools" / "task_ops.py"
 LOCAL_TZ = ZoneInfo("Asia/Hong_Kong")
 
 spec = importlib.util.spec_from_file_location("task_ops", TASK_OPS_PATH)

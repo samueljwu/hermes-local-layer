@@ -4,13 +4,10 @@ set -euo pipefail
 ROOT="/home/hermes/stock-screener"
 cd "$ROOT"
 
-LOCK_PATH="/tmp/stock_screener_weekly_update.lock"
-if [[ "${HERMES_STOCK_SCREENER_LOCK_HELD:-0}" != "1" ]]; then
-  export HERMES_STOCK_SCREENER_LOCK_HELD=1
-  exec flock -n "$LOCK_PATH" "$0" "$@"
-fi
-
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+if ! python3 -c 'from stock_screener.locking import inherited_lock_fd; raise SystemExit(0 if inherited_lock_fd() is not None else 1)'; then
+  exec python3 -m stock_screener.locking -- "$0" "$@"
+fi
 
 started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

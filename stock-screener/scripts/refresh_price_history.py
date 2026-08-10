@@ -30,6 +30,8 @@ from stock_screener.price_history import (  # noqa: E402
     sleep_between_requests,
 )
 from stock_screener.owned_paths import resolve_owned_path  # noqa: E402
+from stock_screener.atomic_io import atomic_write, atomic_write_text  # noqa: E402
+from stock_screener.locking import run_locked  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "price_history.json"
 
@@ -43,13 +45,14 @@ def load_config() -> dict:
 
 
 def write_failures(path: Path, failures: list[FetchResult]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["symbol", "yahoo_symbol", "status", "rows", "path", "attempts", "error"]
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
-        writer.writeheader()
-        for failure in failures:
-            writer.writerow(asdict(failure))
+    def write_temp(temp: Path) -> None:
+        fields = ["symbol", "yahoo_symbol", "status", "rows", "path", "attempts", "error"]
+        with temp.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fields)
+            writer.writeheader()
+            for failure in failures:
+                writer.writerow(asdict(failure))
+    atomic_write(path, write_temp)
 
 
 def append_progress(path: Path, event: dict) -> None:
@@ -188,10 +191,10 @@ def main() -> int:
         "stopped_early_reason": stopped_early_reason,
     }
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(metadata_path, json.dumps(metadata, indent=2, sort_keys=True) + "\n")
     print(json.dumps(metadata, indent=2, sort_keys=True))
     return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_locked(main))

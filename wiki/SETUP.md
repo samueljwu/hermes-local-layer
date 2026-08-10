@@ -53,6 +53,12 @@ From `/home/hermes/wiki`:
 npm run build
 ```
 
+This is the universal production build entrypoint. It takes the shared
+`/home/hermes/.hermes/wiki-build.lock`, builds into a unique staging directory,
+and promotes the completed `dist/` tree with rollback protection. Do not invoke
+`vitepress build` directly for production/manual builds; doing so bypasses the
+lock and atomic-promotion guard. The autobuild hook uses the same guard.
+
 The build script runs, in order:
 
 1. Copies KaTeX CSS/fonts into `public/assets/`.

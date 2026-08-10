@@ -22,6 +22,21 @@ def load_module():
 
 
 class LocalLayerBackupTests(unittest.TestCase):
+    def test_public_readme_describes_filtered_mirror_not_private_backup(self):
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            mod.write_placeholders(work)
+            readme = (work / "README.md").read_text(encoding="utf-8")
+            self.assertIn("filtered public mirror", readme.lower())
+            self.assertIn("not the private knowledge backup", readme.lower())
+            self.assertIn("personal wiki, journal, task, feed", readme.lower())
+            self.assertIn("FILTERED PUBLIC LOCAL LAYER", readme)
+            self.assertIn("allowlist + staged-tree leak scan", readme)
+            self.assertIn("OMITTED ENTIRELY", readme)
+            self.assertNotIn("Private backup of the durable", readme)
+            self.assertNotIn("README.md", mod.ALLOW_FILES)
+
     def test_copy_filtered_rejects_symlink_candidates(self):
         mod = load_module()
         with tempfile.TemporaryDirectory() as td:

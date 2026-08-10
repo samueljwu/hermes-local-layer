@@ -61,7 +61,7 @@ class RefreshSafetyTests(unittest.TestCase):
             original_open = Path.open
 
             def failing_open(self, *args, **kwargs):
-                if self.name == ".rows.csv.tmp":
+                if self.name.startswith(".rows.csv.") and self.name.endswith(".tmp"):
                     raise OSError("simulated write failure")
                 return original_open(self, *args, **kwargs)
 

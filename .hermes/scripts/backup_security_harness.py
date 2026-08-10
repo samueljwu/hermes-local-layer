@@ -12,16 +12,24 @@ matching secret values.
 from __future__ import annotations
 
 import argparse
+import io
 import math
 import os
 import re
 import subprocess
 import sys
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Iterable
 
 REPO = Path("/home/hermes")
 MAX_FILE_BYTES = 2_000_000
+MAX_SCAN_BYTES = 100_000_000
+MAX_ARCHIVE_MEMBER_BYTES = 20_000_000
+MAX_ARCHIVE_TOTAL_BYTES = 100_000_000
+ARCHIVE_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".zip", ".jar")
+UNSUPPORTED_ARCHIVE_SUFFIXES = (".7z", ".rar", ".gz", ".bz2", ".xz")
 DURABLE_STATIC_DIST_PREFIXES = (
     "homepage/dist/",
     "stock-screener/site/dist/",
@@ -44,6 +52,11 @@ BLOCKED_PATH_RE = re.compile(
     r"\.env(?:\..*)?$|"
     r"\.git-credentials$|"
     r"auth\.json$|"
+    r"(?:oauth[-_](?:client|token|credentials).*|client[-_]?secret.*|credentials|token|"
+    r"application_default_credentials|service[-_]?account.*|.*google.*credential.*|"
+    r".*google.*token.*)\.json$|"
+    r"hermes-tasks-calendar/|\.config/gcloud/|"
+    r".*authorization[-_]response.*|.*oauth[-_]callback.*|"
     r"config\.yaml(?:\.bak.*)?$|"
     r"\.hermes/config\.yaml(?:\.bak.*)?$|"
     r"state\.db(?:[-\w.]*)?$|"
@@ -60,6 +73,14 @@ BLOCKED_PATH_RE = re.compile(
     r".*\.(?:pem|key|p12|pfx|kdbx)$"
     r")"
 )
+
+PRIVATE_GOOGLE_CALENDAR_PATHS = {
+    "tasks/_tools/google_calendar_auth.py",
+    "tasks/_tools/google_calendar_sync.py",
+    "tasks/_tools/test_google_calendar_auth.py",
+    "tasks/_tools/test_google_calendar_sync.py",
+    ".hermes/scripts/sync_hermes_tasks_calendar.py",
+}
 
 SECRET_VALUE_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{40,}")),
@@ -131,6 +152,8 @@ def tracked_paths() -> list[str]:
 
 
 def path_is_blocked(path: str) -> bool:
+    if path in PRIVATE_GOOGLE_CALENDAR_PATHS:
+        return True
     allowed_config_paths = {
         "repo-scout/config.yaml",
     }
@@ -197,6 +220,11 @@ def entropy(s: str) -> float:
 
 
 def suspicious_high_entropy_assignments(text: str) -> bool:
+    # Arbitrary binary bytes can accidentally resemble assignment syntax. Exact
+    # provider-token rules still scan binary payloads, but this text heuristic is
+    # meaningful only for text-like content.
+    if "\x00" in text[:4096]:
+        return False
     # Secondary heuristic for non-provider-specific secrets. Reports only when
     # a secret-ish key is assigned a long, high-entropy value. Some documentation
     # mirrors public image URLs that contain query params like ?token=...; those
@@ -209,56 +237,142 @@ def suspicious_high_entropy_assignments(text: str) -> bool:
     return False
 
 
-def read_text_for_scan(path: str) -> str | None:
-    full = REPO / path
-    try:
-        if not full.is_file() or full.stat().st_size > MAX_FILE_BYTES:
-            return None
-        data = full.read_bytes()
-    except OSError:
-        return None
-    if b"\x00" in data[:4096]:
-        return None
-    return data.decode("utf-8", errors="ignore")
+def _archive_suffix(path: str) -> str | None:
+    lower = path.lower()
+    return next((suffix for suffix in ARCHIVE_SUFFIXES if lower.endswith(suffix)), None)
 
 
-def read_staged_text_for_scan(path: str) -> str | None:
+def _archive_kind(path: str, data: bytes) -> str | None:
+    """Identify supported archives by content, not only attacker-controlled names."""
+    # is_zipfile locates the central directory and therefore also catches
+    # prefixed/self-extracting ZIPs whose first bytes are not a ZIP signature.
+    if zipfile.is_zipfile(io.BytesIO(data)):
+        return "zip"
+    if data.startswith(b"\x1f\x8b") or (len(data) > 262 and data[257:262] == b"ustar"):
+        return "tar"
+    suffix = _archive_suffix(path)
+    if suffix:
+        return "zip" if suffix in {".zip", ".jar"} else "tar"
+    return None
+
+
+def _scan_archive_bytes(path: str, data: bytes, kind: str) -> tuple[list[str], str | None]:
+    """Return decoded archive member payloads, or a path-only fail-closed error."""
+    texts: list[str] = []
+    total = 0
     try:
-        meta = git(["cat-file", "-s", f":{path}"], check=False).strip()
-        if not meta or int(meta) > MAX_FILE_BYTES:
-            return None
-        proc = subprocess.run(
-            ["git", "show", f":{path}"],
-            cwd=REPO,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
+        if kind == "zip":
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                members = ((info.filename, info.file_size, archive.open(info)) for info in archive.infolist() if not info.is_dir())
+                for name, size, stream in members:
+                    if _archive_suffix(name):
+                        return [], "nested archive not safely scannable"
+                    if size > MAX_ARCHIVE_MEMBER_BYTES or total + size > MAX_ARCHIVE_TOTAL_BYTES:
+                        return [], "archive scan limit exceeded"
+                    payload = stream.read(MAX_ARCHIVE_MEMBER_BYTES + 1)
+                    stream.close()
+                    if len(payload) != size:
+                        return [], "archive member unreadable"
+                    if _archive_kind(name, payload):
+                        return [], "nested archive not safely scannable"
+                    total += size
+                    texts.append(name.decode("utf-8", errors="ignore") if isinstance(name, bytes) else name)
+                    texts.append(payload.decode("utf-8", errors="ignore"))
+        else:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+                for info in archive:
+                    if not info.isfile():
+                        continue
+                    if _archive_suffix(info.name):
+                        return [], "nested archive not safely scannable"
+                    if info.size > MAX_ARCHIVE_MEMBER_BYTES or total + info.size > MAX_ARCHIVE_TOTAL_BYTES:
+                        return [], "archive scan limit exceeded"
+                    stream = archive.extractfile(info)
+                    if stream is None:
+                        return [], "archive member unreadable"
+                    payload = stream.read(MAX_ARCHIVE_MEMBER_BYTES + 1)
+                    if len(payload) != info.size:
+                        return [], "archive member unreadable"
+                    if _archive_kind(info.name, payload):
+                        return [], "nested archive not safely scannable"
+                    total += info.size
+                    texts.append(info.name)
+                    texts.append(payload.decode("utf-8", errors="ignore"))
+    except (OSError, tarfile.TarError, zipfile.BadZipFile, RuntimeError):
+        return [], "invalid or unreadable archive"
+    return texts, None
+
+
+def read_payloads_for_scan(
+    path: str, *, staged: bool = False, tracked_index: bool = False
+) -> tuple[list[str], str | None]:
+    """Read every byte that can carry a secret; never silently skip a file."""
+    if staged or tracked_index:
+        unreadable = "staged content unreadable" if staged else "tracked index content unreadable"
+        size_proc = subprocess.run(
+            ["git", "cat-file", "-s", f":{path}"], cwd=REPO,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, text=True,
         )
-    except (OSError, ValueError):
-        return None
-    if proc.returncode != 0:
-        return None
-    data = proc.stdout
-    if b"\x00" in data[:4096]:
-        return None
-    return data.decode("utf-8", errors="ignore")
+        if size_proc.returncode != 0:
+            return [], unreadable
+        try:
+            size = int(size_proc.stdout.strip())
+        except ValueError:
+            return [], unreadable
+        if size > MAX_SCAN_BYTES:
+            return [], "content exceeds bounded scan limit"
+        proc = subprocess.run(
+            ["git", "show", f":{path}"], cwd=REPO,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        if proc.returncode != 0:
+            return [], unreadable
+        data = proc.stdout
+    else:
+        full = REPO / path
+        try:
+            if not full.is_file():
+                return [], "tracked content unreadable"
+            if full.stat().st_size > MAX_SCAN_BYTES:
+                return [], "content exceeds bounded scan limit"
+            data = full.read_bytes()
+        except OSError:
+            return [], "tracked content unreadable"
+
+    archive_kind = _archive_kind(path, data)
+    if archive_kind:
+        return _scan_archive_bytes(path, data, archive_kind)
+    if path.lower().endswith(UNSUPPORTED_ARCHIVE_SUFFIXES):
+        return [], "unsupported archive format"
+    # Decode all bytes, including binary and files above the old size cutoff.
+    # Provider tokens and assignment syntax are ASCII-compatible, while ignored
+    # bytes cannot manufacture a match or expose the matching value in output.
+    return [data.decode("utf-8", errors="ignore")], None
 
 
-def scan_content(paths: Iterable[str], *, staged: bool = False) -> list[str]:
+def scan_content(
+    paths: Iterable[str], *, staged: bool = False, tracked_index: bool = False
+) -> list[str]:
     findings: list[str] = []
-    reader = read_staged_text_for_scan if staged else read_text_for_scan
     for path in sorted(set(paths)):
-        text = reader(path)
-        if text is None:
+        texts, issue = read_payloads_for_scan(
+            path, staged=staged, tracked_index=tracked_index
+        )
+        if issue:
+            findings.append(f"{path}: content scan failed closed ({issue})")
             continue
-        for name, pattern in SECRET_VALUE_RULES:
-            if any(
-                not allowed_secret_value_false_positive(path, name, match.group(0))
-                for match in pattern.finditer(text)
-            ):
-                findings.append(f"{path}: content rule {name}")
-        if suspicious_high_entropy_assignments(text):
-            findings.append(f"{path}: content rule secret_assignment_high_entropy")
+        matched_rules: set[str] = set()
+        for text in texts:
+            for name, pattern in SECRET_VALUE_RULES:
+                if name not in matched_rules and any(
+                    not allowed_secret_value_false_positive(path, name, match.group(0))
+                    for match in pattern.finditer(text)
+                ):
+                    findings.append(f"{path}: content rule {name}")
+                    matched_rules.add(name)
+            if "secret_assignment_high_entropy" not in matched_rules and suspicious_high_entropy_assignments(text):
+                findings.append(f"{path}: content rule secret_assignment_high_entropy")
+                matched_rules.add("secret_assignment_high_entropy")
     return findings
 
 
@@ -291,6 +405,10 @@ def main() -> int:
     include_tracked = args.tracked or args.all
 
     staged_selected: set[str] = set(staged_paths()) if include_staged else set()
+    staged_deleted = set(nul_split(git(["diff", "--cached", "--name-only", "--diff-filter=D", "-z"]))) if include_staged else set()
+    # A blocked path already present in history must be removable. There is no
+    # staged blob to scan, and rejecting its deletion would trap unsafe content.
+    staged_selected -= staged_deleted
     tracked_selected: set[str] = set(tracked_paths()) if include_tracked else set()
     selected: set[str] = set()
     selected.update(staged_selected)
@@ -307,7 +425,10 @@ def main() -> int:
     if staged_selected:
         findings.extend(scan_content(staged_selected, staged=True))
     if tracked_selected:
-        findings.extend(scan_content(tracked_selected, staged=False))
+        # Scan the tracked bytes in the index, not the mutable worktree. An
+        # ordinary unstaged deletion is expected backup state and must remain
+        # stageable; new/modified worktree bytes are scanned after `git add`.
+        findings.extend(scan_content(tracked_selected, tracked_index=True))
     findings.extend(scan_remote_urls())
 
     if findings:

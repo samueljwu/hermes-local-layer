@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /home/hermes
+REPO=${HERMES_BACKUP_REPO:-/home/hermes}
+cd "$REPO"
 
-HARNESS=/home/hermes/.hermes/scripts/backup_security_harness.py
-DOC_GUARD=/home/hermes/.hermes/scripts/backup_documentation_guard.py
-LOCK=/tmp/hermes-knowledge-backup.lock
+HARNESS=${HERMES_BACKUP_HARNESS:-/home/hermes/.hermes/scripts/backup_security_harness.py}
+DOC_GUARD=${HERMES_BACKUP_DOC_GUARD:-/home/hermes/.hermes/scripts/backup_documentation_guard.py}
+LOCK=${HERMES_BACKUP_LOCK:-/tmp/hermes-knowledge-backup.lock}
 MODE=manual
 
 usage() {
@@ -79,17 +80,17 @@ git add .
 "$HARNESS" --all --quiet
 
 if git diff --cached --quiet; then
-  echo "No backup changes to commit."
-  exit 0
+  echo "No backup changes to commit; checking for an unpushed commit."
+else
+  prefix="Manual backup"
+  if [[ "$MODE" == "scheduled" ]]; then
+    prefix="Scheduled backup"
+  fi
+  git commit -m "$prefix $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-prefix="Manual backup"
-if [[ "$MODE" == "scheduled" ]]; then
-  prefix="Scheduled backup"
-fi
-git commit -m "$prefix $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-# Re-run after commit to catch any accidental tracked-state problem before push.
+# Re-run even when there was nothing new to commit: HEAD may still be ahead
+# because an earlier push failed after a successful commit.
 "$HARNESS" --tracked --quiet
 
 git push

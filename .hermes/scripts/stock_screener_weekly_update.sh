@@ -5,10 +5,8 @@ ROOT="/home/hermes/stock-screener"
 LOG_DIR="$ROOT/out/cron_logs"
 mkdir -p "$LOG_DIR"
 LOG_PATH="$LOG_DIR/weekly_update_$(date -u +%Y%m%dT%H%M%SZ).log"
-LOCK_PATH="/tmp/stock_screener_weekly_update.lock"
-
 set +e
-HERMES_STOCK_SCREENER_LOCK_HELD=1 flock -n "$LOCK_PATH" "$ROOT/scripts/weekly_update.sh" >"$LOG_PATH" 2>&1
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m stock_screener.locking -- "$ROOT/scripts/weekly_update.sh" >"$LOG_PATH" 2>&1
 status=$?
 set -e
 

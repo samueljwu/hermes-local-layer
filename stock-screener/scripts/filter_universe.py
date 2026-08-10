@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from stock_screener.owned_paths import resolve_owned_path
+from stock_screener.atomic_io import atomic_write, atomic_write_text
+from stock_screener.locking import run_locked
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "screener_filters.json"
@@ -25,14 +27,15 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def write_csv(path: Path, rows: list[dict[str, str]]) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        path.write_text("", encoding="utf-8")
-        return 0
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+    def write_temp(temp: Path) -> None:
+        if not rows:
+            temp.write_text("", encoding="utf-8")
+            return
+        with temp.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+    atomic_write(path, write_temp)
     return len(rows)
 
 
@@ -141,10 +144,10 @@ def main() -> int:
     }
     summary_path = resolve_owned_path(ROOT, config["summary_path"], label="summary_path")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(summary_path, json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_locked(main))

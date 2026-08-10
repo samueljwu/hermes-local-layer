@@ -35,7 +35,7 @@ If a user wants a recommendation ingested into wiki, captured in journal, or con
 
 ## Source Universe
 
-The live source universe is `_meta/information_sources.json`. It is the only canonical source list.
+The live source universe is `_meta/information_sources.json`. It is the only canonical source list. Runtime fetches must honor each row's `enabled` and `connector` values. The configured `endpoint` is authoritative for arXiv, PubMed, Hacker News, and generic RSS connectors; bounded site-specific connectors retain their audited source URL internally. `sources lint` and `sources validate` dynamically report every configured row, using native structural checks for `arxiv_api` and `hn_front_page` and explicitly skipping disabled rows without network access.
 
 `source-report.md` is a generated human-readable snapshot of the registry. README and SCHEMA must document policy, invariants, source-add workflow, and anti-contamination rules, not duplicate every source row. This prevents stale docs when individual sources are enabled, disabled, added, or removed.
 
@@ -90,7 +90,7 @@ The staleness rule is a ranking policy, not a source removal policy. Approved ol
 - `_meta/interest_feedback.json` — append-only positive-interest promotions from `/feedinterest`; current profile building may read it as feed-local evidence, but exploratory ranking must not treat it as score feedback
 - `_meta/source_state.json` — source-specific seen/check state plus `last_fetch_errors` for upstream/API fetch failures; fetch errors are operational telemetry, not candidates, and health only reports errors that have not been superseded by a later check for the same source
 - `_meta/information_sources.json` — canonical candidate/read-only source list rendered into pinned Discord #feed message
-- `_meta/information_sources_message_state.json` — Discord message ID/hash state for the pinned source-list updater
+- `_meta/information_sources_message_state.json` — exclusive Discord message ID/hash state for the pinned source-list updater; updates are serialized with `.feed_ops.lock` and persisted by unique temporary file + file/directory `fsync` + `os.replace`, and the updater must never copy `message_id` into or rewrite a stale `_meta/information_sources.json`
 - `runs/YYYY-MM-DD-HHMM.md` — rendered digest for each current twice-daily run; older `runs/YYYY-MM-DD.md` files may exist from the previous daily schedule
 - `/home/hermes/homepage/dist/feed/index.html` — generated static HTML picks index, updated by successful `digest` runs and manually by `feed_ops.py render-page`; it shows the most recent 60 picks expanded, groups rows by date, provides client-side filtering over date/title only, and compacts older picks into collapsed yearly archive sections
 

@@ -59,9 +59,12 @@ class FeedHealthTests(unittest.TestCase):
         try:
             feed_ops.load_json = fake_load_json
             feed_ops.save_json = fake_save_json
-            feed_ops.candidate_source_records = lambda: []
+            feed_ops.candidate_source_records = lambda: [
+                {"id": "arxiv", "connector": "arxiv_api", "endpoint": "https://export.arxiv.org/api/query", "enabled": True},
+                {"id": "hacker_news", "connector": "hn_front_page", "endpoint": "https://news.ycombinator.com/news", "enabled": True},
+            ]
             feed_ops.arxiv_query = lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("timed out"))
-            feed_ops.fetch_hn = lambda: []
+            feed_ops.fetch_hn = lambda *args, **kwargs: []
             feed_ops.fetch_public_blog_candidates = lambda limit_each=12: []
             feed_ops.now_iso = lambda: "2026-05-16T10:03:00Z"
 

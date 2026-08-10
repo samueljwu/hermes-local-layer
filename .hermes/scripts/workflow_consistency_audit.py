@@ -26,21 +26,15 @@ def main() -> int:
 
     try:
         task_registry = task_ops.read_registry()
-        issues.extend(f'tasks: {x}' for x in task_ops.validate_registry(task_registry))
-        pending_ids = {str(t.get('id')) for t in task_registry if t.get('status', 'pending') == 'pending'}
-        note_ids = {p.stem for p in (Path.home() / 'tasks').glob('*/T*.md')}
-        for tid in sorted(pending_ids - note_ids):
-            issues.append(f'tasks: pending {tid} missing derived note')
-        for tid in sorted(note_ids - pending_ids):
-            issues.append(f'tasks: stale derived note for non-pending {tid}')
+        issues.extend(f'tasks: {x}' for x in task_ops.validate_registry(task_registry, check_notes=True, root=task_ops.TASKS_ROOT))
     except Exception as exc:
         issues.append(f'tasks: audit failed: {exc}')
 
     try:
         journal_registry = journal_ops.read_registry()
-        index_path = Path.home() / 'journal' / 'index.md'
+        index_path = journal_ops.INDEX_PATH
         index_text = index_path.read_text(errors='replace') if index_path.exists() else ''
-        issues.extend(f'journal: {x}' for x in journal_ops.validate_registry(journal_registry, index_text=index_text))
+        issues.extend(f'journal: {x}' for x in journal_ops.validate_registry(journal_registry, index_text=index_text, check_entries=True, root=journal_ops.JOURNAL_ROOT))
     except Exception as exc:
         issues.append(f'journal: audit failed: {exc}')
 

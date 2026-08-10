@@ -14,6 +14,7 @@ import json
 import random
 import sys
 import time
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +38,8 @@ from build_chart_page import (
     write_text_atomic,
 )  # noqa: E402
 from stock_screener.patterns import read_price_csv, sma  # noqa: E402
+from stock_screener.atomic_io import atomic_text_writer  # noqa: E402
+from stock_screener.locking import run_locked  # noqa: E402
 from stock_screener.symbols import normalize_symbol, safe_symbol_path  # noqa: E402
 
 PATTERN_CONFIG_PATH = ROOT / "config" / "patterns.json"
@@ -143,7 +146,7 @@ def sample_symbols(symbols: list[str], size: int, pattern_config: dict, seed: in
 def write_sample(path: Path, scored_symbols: list[tuple[str, float]], seed: int, universe: dict[str, dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = ["sample_seed", "symbol", "exclusion_quality", "name", "exchange", "sector", "industry", "market_cap"]
-    with path.open("w", newline="", encoding="utf-8") as fh:
+    with atomic_text_writer(path, newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         for symbol, score in scored_symbols:
@@ -164,11 +167,7 @@ def render_page(scored_symbols: list[tuple[str, float]], seed: int, pattern_conf
     output_dir = resolve_owned_output_path(SITE_DIST, chart_config["output_dir"])
     ensure_owned_directory(output_dir)
     chart_asset_dir = resolve_owned_output_path(SITE_DIST, Path(chart_config["output_dir"]) / "excluded-charts")
-    chart_staging_dir = resolve_owned_output_path(SITE_DIST, Path(chart_config["output_dir"]) / ".excluded-charts.tmp")
-    if chart_staging_dir.exists():
-        import shutil
-        shutil.rmtree(chart_staging_dir)
-    ensure_owned_directory(chart_staging_dir)
+    chart_staging_dir = Path(tempfile.mkdtemp(dir=output_dir, prefix=".excluded-charts."))
     price_dir = ROOT / chart_config["price_dir"]
     cards = []
     skipped = []
@@ -287,4 +286,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_locked(main))

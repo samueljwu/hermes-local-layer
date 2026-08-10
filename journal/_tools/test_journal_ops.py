@@ -85,6 +85,23 @@ def test_validate_detects_invalid_status_and_stale_entry_file(tmp_path):
     assert any('stale or misplaced journal entry file' in issue for issue in issues)
 
 
+def test_validate_detects_derived_entry_and_index_content_drift(tmp_path):
+    root = configure_tmp_paths(tmp_path)
+    registry = [
+        {'id': 'J1', 'title': 'Canonical title', 'tag': 'ideas', 'date': '2026-05-07', 'tags': [], 'status': 'active', 'original': 'raw', 'entry': 'clean', 'related': []},
+    ]
+    journal_ops.regenerate_entries(registry, root=root)
+    expected_index = journal_ops.build_index(registry)
+    (root / 'index.md').write_text(expected_index, encoding='utf-8')
+    (root / 'ideas' / 'J1.md').write_text('plausible but stale', encoding='utf-8')
+    drifted_index = expected_index.replace('Canonical title', 'Stale title')
+
+    issues = journal_ops.validate_registry(registry, index_text=drifted_index, check_entries=True, root=root)
+
+    assert any('derived journal entry content differs from registry' in issue for issue in issues)
+    assert 'derived journal index content differs from registry' in issues
+
+
 def test_unsafe_journal_entry_id_rejected_for_path(tmp_path):
     root = configure_tmp_paths(tmp_path)
     entry = {'id': 'J../evil', 'title': 'Bad', 'tag': 'ideas', 'date': '2026-05-07', 'tags': [], 'status': 'active', 'original': 'a', 'entry': 'a', 'related': []}

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import subprocess
 import tempfile
 import unittest
+import tarfile
+import zipfile
 from pathlib import Path
 
 
@@ -49,6 +52,133 @@ class BackupSecurityHarnessTests(unittest.TestCase):
                 setattr(harness, 'REPO', old_repo)
 
         self.assertEqual(findings, ['leak.txt: content rule github_pat'])
+
+    def test_tracked_scan_reads_index_when_worktree_file_is_deleted(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
+            tracked = repo / 'routine-state.md'
+            tracked.write_text('benign tracked state\n', encoding='utf-8')
+            subprocess.run(['git', 'add', 'routine-state.md'], cwd=repo, check=True)
+            tracked.unlink()
+
+            old_repo = harness.REPO
+            try:
+                setattr(harness, 'REPO', repo)
+                findings = harness.scan_content(
+                    ['routine-state.md'], tracked_index=True
+                )
+            finally:
+                setattr(harness, 'REPO', old_repo)
+
+        self.assertEqual(findings, [])
+
+    def test_large_and_binary_files_are_scanned_instead_of_skipped(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            token = b'github_pat_' + b'A' * 44
+            (repo / 'large.bin').write_bytes(b'\x00' + b'x' * harness.MAX_FILE_BYTES + token)
+            old_repo = harness.REPO
+            try:
+                harness.REPO = repo
+                findings = harness.scan_content(['large.bin'])
+            finally:
+                harness.REPO = old_repo
+        self.assertEqual(findings, ['large.bin: content rule github_pat'])
+
+    def test_archive_members_are_scanned_and_invalid_archives_fail_closed(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            payload = repo / 'member.txt'
+            payload.write_text('github_pat_' + 'A' * 44, encoding='utf-8')
+            with tarfile.open(repo / 'backup.tar.gz', 'w:gz') as archive:
+                archive.add(payload, arcname='member.txt')
+            (repo / 'broken.zip').write_bytes(b'not a zip')
+            (repo / 'opaque.7z').write_bytes(b'opaque archive')
+            old_repo = harness.REPO
+            try:
+                harness.REPO = repo
+                archive_findings = harness.scan_content(['backup.tar.gz'])
+                broken_findings = harness.scan_content(['broken.zip'])
+                unsupported_findings = harness.scan_content(['opaque.7z'])
+            finally:
+                harness.REPO = old_repo
+        self.assertEqual(archive_findings, ['backup.tar.gz: content rule github_pat'])
+        self.assertEqual(broken_findings, ['broken.zip: content scan failed closed (invalid or unreadable archive)'])
+        self.assertEqual(unsupported_findings, ['opaque.7z: content scan failed closed (unsupported archive format)'])
+
+    def test_renamed_archive_is_detected_by_magic_and_scanned(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            with zipfile.ZipFile(repo / 'renamed.bin', 'w') as archive:
+                archive.writestr('credential.txt', 'github_pat_' + 'A' * 44)
+            old_repo = harness.REPO
+            try:
+                harness.REPO = repo
+                findings = harness.scan_content(['renamed.bin'])
+            finally:
+                harness.REPO = old_repo
+        self.assertEqual(findings, ['renamed.bin: content rule github_pat'])
+
+    def test_prefixed_and_suffixless_nested_archives_fail_closed(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            inner = io.BytesIO()
+            with zipfile.ZipFile(inner, 'w') as archive:
+                archive.writestr('credential.txt', 'github_pat_' + 'A' * 44)
+            (repo / 'prefixed.bin').write_bytes(b'harmless launcher preamble\n' + inner.getvalue())
+            with zipfile.ZipFile(repo / 'outer.zip', 'w') as archive:
+                archive.writestr('payload', inner.getvalue())
+            old_repo = harness.REPO
+            try:
+                harness.REPO = repo
+                prefixed = harness.scan_content(['prefixed.bin'])
+                nested = harness.scan_content(['outer.zip'])
+            finally:
+                harness.REPO = old_repo
+        self.assertEqual(prefixed, ['prefixed.bin: content rule github_pat'])
+        self.assertEqual(nested, ['outer.zip: content scan failed closed (nested archive not safely scannable)'])
+
+    def test_oversized_payload_fails_closed_before_read(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            oversized = repo / 'oversized.bin'
+            with oversized.open('wb') as fh:
+                fh.truncate(harness.MAX_SCAN_BYTES + 1)
+            old_repo = harness.REPO
+            try:
+                harness.REPO = repo
+                findings = harness.scan_content(['oversized.bin'])
+            finally:
+                harness.REPO = old_repo
+        self.assertEqual(findings, ['oversized.bin: content scan failed closed (content exceeds bounded scan limit)'])
+
+    def test_staged_deletion_of_blocked_tracked_path_is_allowed(self):
+        harness = load_harness()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
+            subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=repo, check=True)
+            subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=repo, check=True)
+            blocked = repo / '.env'
+            blocked.write_text('old blocked file\n', encoding='utf-8')
+            subprocess.run(['git', 'add', '.env'], cwd=repo, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'seed'], cwd=repo, check=True)
+            subprocess.run(['git', 'rm', '-q', '.env'], cwd=repo, check=True)
+            old_repo, old_argv = harness.REPO, __import__('sys').argv
+            try:
+                harness.REPO = repo
+                __import__('sys').argv = ['backup_security_harness.py', '--staged', '--quiet']
+                self.assertEqual(harness.main(), 0)
+            finally:
+                harness.REPO = old_repo
+                __import__('sys').argv = old_argv
 
     def test_remote_scan_flags_token_only_github_userinfo_without_echoing_value(self):
         harness = load_harness()

@@ -16,6 +16,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from stock_screener.price_validation import validate_price_cache  # noqa: E402
+from stock_screener.atomic_io import atomic_write_text  # noqa: E402
+from stock_screener.locking import run_locked  # noqa: E402
+from stock_screener.owned_paths import resolve_owned_path  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "price_history.json"
 DEFAULT_OUTPUT = ROOT / "data" / "prices" / "yahoo_weekly_validation.json"
@@ -29,8 +32,9 @@ def read_symbols(path: Path) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate price history cache")
     parser.add_argument("--min-rows", type=int, default=None, help="Minimum rows to consider history full length")
-    parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Validation JSON output path")
+    parser.add_argument("--output", default=str(DEFAULT_OUTPUT.relative_to(ROOT)), help="Validation JSON output path (relative to project root)")
     args = parser.parse_args()
+    output = resolve_owned_path(ROOT, args.output, label="--output")
 
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     min_rows = int(args.min_rows if args.min_rows is not None else config["min_expected_rows"])
@@ -42,14 +46,11 @@ def main() -> int:
         "price_dir": config["output_dir"],
         "min_expected_rows": min_rows,
     })
-    output = Path(args.output)
-    if not output.is_absolute():
-        output = ROOT / output
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(output, json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 1 if summary["missing_count"] or summary["invalid_count"] else 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_locked(main))

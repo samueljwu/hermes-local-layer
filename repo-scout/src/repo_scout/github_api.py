@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -16,6 +17,7 @@ from typing import Any
 from .config import ScoutConfig
 
 GITHUB_API = "https://api.github.com"
+_CACHE_MISS = object()
 
 
 @dataclass
@@ -218,8 +220,38 @@ class GitHubClient:
     def _cache_path(self, url: str) -> Path | None:
         if not self.cache_dir:
             return None
-        safe = urllib.parse.quote(url, safe="")[:220]
-        return self.cache_dir / f"{safe}.json"
+        parsed = urllib.parse.urlsplit(url)
+        canonical_url = urllib.parse.urlunsplit(
+            (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path or "/", parsed.query, "")
+        )
+        digest = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
+        readable = urllib.parse.quote(parsed.path.strip("/") or "root", safe="-_.").replace("%", "_")[:80]
+        return self.cache_dir / f"{readable}-{digest}.json"
+
+    def _legacy_cache_path(self, url: str) -> Path | None:
+        """Return an old-format path only when it could not have been truncated.
+
+        Long legacy keys were truncated to 220 characters and may therefore
+        collide. They must never be used as migration sources.
+        """
+        if not self.cache_dir:
+            return None
+        encoded = urllib.parse.quote(url, safe="")
+        if len(encoded) > 220:
+            return None
+        return self.cache_dir / f"{encoded}.json"
+
+    def _read_fresh_cache(self, path: Path) -> Any:
+        if not path.exists() or time.time() - path.stat().st_mtime >= self.cache_ttl:
+            return _CACHE_MISS
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            return _CACHE_MISS
 
     def get_json(self, path_or_url: str) -> Any:
         if path_or_url.startswith("http"):
@@ -231,14 +263,20 @@ class GitHubClient:
             url = f"{GITHUB_API}{path_or_url}"
         kind = _request_kind(path_or_url)
         cache_path = self._cache_path(url)
-        if cache_path and cache_path.exists() and time.time() - cache_path.stat().st_mtime < self.cache_ttl:
-            try:
-                return json.loads(cache_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                try:
-                    cache_path.unlink()
-                except OSError:
-                    pass
+        if cache_path:
+            cached = self._read_fresh_cache(cache_path)
+            if cached is not _CACHE_MISS:
+                return cached
+
+            # Safely migrate only legacy names that contained the complete URL.
+            # Truncated legacy names are ignored because their source URL cannot
+            # be proven and they are the collision mode this cache format fixes.
+            legacy_cache_path = self._legacy_cache_path(url)
+            if legacy_cache_path and legacy_cache_path != cache_path:
+                cached = self._read_fresh_cache(legacy_cache_path)
+                if cached is not _CACHE_MISS:
+                    _atomic_write_json(cache_path, cached)
+                    return cached
 
         attempts = 0
         while True:

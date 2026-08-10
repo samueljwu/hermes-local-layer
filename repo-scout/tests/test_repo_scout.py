@@ -1,5 +1,7 @@
+import hashlib
 import tempfile
 import unittest
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -335,6 +337,47 @@ class RepoScoutTests(unittest.TestCase):
             self.assertEqual(calls, ["https://api.github.com/rate_limit"])
             self.assertEqual(cache_path.read_text(encoding="utf-8"), '{\n  "ok": true\n}\n')
             self.assertFalse(list(Path(td).glob("*.tmp")))
+
+    def test_github_client_cache_paths_do_not_collide_on_long_query_suffixes(self):
+        with tempfile.TemporaryDirectory() as td:
+            client = GitHubClient(cache_dir=td)
+            shared_query = "q=" + ("cache-key-regression-" * 20)
+            first_url = f"https://api.github.com/search/repositories?{shared_query}&page=1"
+            second_url = f"https://api.github.com/search/repositories?{shared_query}&page=2"
+
+            # The previous truncated URL quoting produced the same path here.
+            self.assertEqual(
+                urllib.parse.quote(first_url, safe="")[:220],
+                urllib.parse.quote(second_url, safe="")[:220],
+            )
+            first_path = client._cache_path(first_url)
+            second_path = client._cache_path(second_url)
+            self.assertIsNotNone(first_path)
+            self.assertIsNotNone(second_path)
+            self.assertNotEqual(first_path, second_path)
+            assert first_path is not None
+            assert second_path is not None
+            self.assertIn(hashlib.sha256(first_url.encode("utf-8")).hexdigest(), first_path.name)
+            self.assertIn(hashlib.sha256(second_url.encode("utf-8")).hexdigest(), second_path.name)
+
+    def test_github_client_safely_migrates_untruncated_legacy_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            client = GitHubClient(cache_dir=td, cache_ttl_hours=24, core_request_interval=0)
+            url = "https://api.github.com/rate_limit"
+            legacy_path = client._legacy_cache_path(url)
+            cache_path = client._cache_path(url)
+            assert legacy_path is not None
+            assert cache_path is not None
+            legacy_path.write_text('{"cached": true}', encoding="utf-8")
+
+            self.assertEqual(client.get_json("/rate_limit"), {"cached": True})
+            self.assertEqual(cache_path.read_text(encoding="utf-8"), '{\n  "cached": true\n}\n')
+
+    def test_github_client_does_not_migrate_collision_prone_legacy_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            client = GitHubClient(cache_dir=td)
+            long_url = "https://api.github.com/search/repositories?q=" + ("x" * 300) + "&page=1"
+            self.assertIsNone(client._legacy_cache_path(long_url))
 
     def test_github_client_rejects_non_github_absolute_urls_before_auth_header(self):
         import os

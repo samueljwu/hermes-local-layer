@@ -7,19 +7,19 @@ build success/failure. Use --verbose for no-op details and full npm output.
 from __future__ import annotations
 
 import argparse
-import fcntl
+
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 HOME = Path.home()
 WIKI = HOME / "wiki"
 STATE_FILE = HOME / ".hermes" / "wiki-build-state.json"
-LOCK_FILE = HOME / ".hermes" / "wiki-build.lock"
 LOG_FILE = HOME / ".hermes" / "logs" / "wiki-autobuild.log"
 
 WATCH_PATHS = [
@@ -94,7 +94,26 @@ def save_state(snap: dict, status: str) -> None:
         "last_build_status": status,
         "last_build_at": datetime.now(timezone.utc).isoformat(),
     }
-    STATE_FILE.write_text(json.dumps(data, indent=2) + "\n")
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{STATE_FILE.name}.", suffix=".tmp", dir=str(STATE_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, STATE_FILE)
+        try:
+            dir_fd = os.open(STATE_FILE.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
 
 
 def append_log(text: str) -> None:
@@ -108,7 +127,7 @@ def run_build(verbose: bool) -> int:
     env.setdefault("HOME", str(HOME))
     started = datetime.now(timezone.utc).isoformat()
     proc = subprocess.run(
-        ["npm", "run", "build"],
+        [sys.executable, str(WIKI / "_tools" / "wiki_build.py"), "--nonblocking"],
         cwd=WIKI,
         text=True,
         stdout=subprocess.PIPE,
@@ -133,30 +152,25 @@ def main() -> int:
         print(f"[wiki-autobuild] Wiki directory not found: {WIKI}", file=sys.stderr)
         return 1
 
-    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with LOCK_FILE.open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            if args.verbose:
-                print("[wiki-autobuild] Build already running; skipping")
-            return 0
+    snap = snapshot()
+    state = load_state()
+    if not args.force and state.get("digest") == snap["digest"]:
+        if args.verbose:
+            print(f"[wiki-autobuild] No wiki changes detected ({snap['file_count']} watched files)")
+        return 0
 
-        snap = snapshot()
-        state = load_state()
-        if not args.force and state.get("digest") == snap["digest"]:
-            if args.verbose:
-                print(f"[wiki-autobuild] No wiki changes detected ({snap['file_count']} watched files)")
-            return 0
-
-        print(f"[wiki-autobuild] Wiki changes detected; rebuilding ({snap['file_count']} watched files)", flush=True)
-        rc = run_build(args.verbose)
-        if rc == 0:
-            save_state(snap, "ok")
-            print("[wiki-autobuild] Build complete", flush=True)
-        else:
-            print(f"[wiki-autobuild] Build failed with exit code {rc}; see {LOG_FILE}", file=sys.stderr, flush=True)
-        return rc
+    print(f"[wiki-autobuild] Wiki changes detected; rebuilding ({snap['file_count']} watched files)", flush=True)
+    rc = run_build(args.verbose)
+    if rc == 75:
+        if args.verbose:
+            print("[wiki-autobuild] Build already running; leaving state dirty for the next hook")
+        return 0
+    if rc == 0:
+        save_state(snap, "ok")
+        print("[wiki-autobuild] Build complete", flush=True)
+    else:
+        print(f"[wiki-autobuild] Build failed with exit code {rc}; see {LOG_FILE}", file=sys.stderr, flush=True)
+    return rc
 
 
 if __name__ == "__main__":

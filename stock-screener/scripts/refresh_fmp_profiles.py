@@ -30,6 +30,8 @@ from urllib.request import Request, urlopen
 
 from stock_screener.symbols import normalize_symbol, safe_symbol_path
 from stock_screener.owned_paths import resolve_owned_path
+from stock_screener.atomic_io import atomic_write, atomic_write_text
+from stock_screener.locking import run_locked
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "fmp_profile_refresh.json"
@@ -115,14 +117,18 @@ def load_or_fetch_profile(
     raw_path = safe_symbol_path(raw_dir, symbol, ".json")
     if raw_path.exists() and not force_refresh:
         try:
-            return json.loads(raw_path.read_text(encoding="utf-8")), False, ""
-        except json.JSONDecodeError:
+            cached = json.loads(raw_path.read_text(encoding="utf-8"))
+            if isinstance(cached, list) and cached and isinstance(cached[0], dict):
+                return cached, False, ""
+        except (json.JSONDecodeError, OSError):
             pass
 
     try:
         data = fetch_profile(base_url, symbol, api_key)
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise RuntimeError("empty or malformed FMP profile response; preserved existing raw cache")
         raw_dir.mkdir(parents=True, exist_ok=True)
-        raw_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        atomic_write_text(raw_path, json.dumps(data, indent=2, sort_keys=True) + "\n")
         if delay_seconds > 0:
             time.sleep(delay_seconds)
         return data, True, ""
@@ -163,21 +169,19 @@ def build_profile_row(universe_row: dict[str, str], profile_payload: list[dict],
 
 def write_csv(path: Path, rows: Iterable[object]) -> int:
     rows = list(rows)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    if not rows:
-        tmp_path.write_text("", encoding="utf-8")
-        os.replace(tmp_path, path)
-        return 0
-    fieldnames = list(asdict(rows[0]).keys()) if hasattr(rows[0], "__dataclass_fields__") else list(rows[0].keys())
-    with tmp_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(asdict(row) if hasattr(row, "__dataclass_fields__") else row)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    def write_temp(tmp_path: Path) -> None:
+        if not rows:
+            tmp_path.write_text("", encoding="utf-8")
+            return
+        fieldnames = list(asdict(rows[0]).keys()) if hasattr(rows[0], "__dataclass_fields__") else list(rows[0].keys())
+        with tmp_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(asdict(row) if hasattr(row, "__dataclass_fields__") else row)
+            f.flush()
+            os.fsync(f.fileno())
+    atomic_write(path, write_temp)
     return len(rows)
 
 
@@ -300,11 +304,11 @@ def main() -> int:
         "processed_output_promotion_reason": promotion_reason,
     }
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(metadata_path, json.dumps(metadata, indent=2, sort_keys=True) + "\n")
 
     print(json.dumps(metadata, indent=2, sort_keys=True))
     return 0 if error_count == 0 else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_locked(main))

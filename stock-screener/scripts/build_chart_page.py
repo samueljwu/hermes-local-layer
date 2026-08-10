@@ -17,6 +17,7 @@ import re
 import shutil
 import time
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from stock_screener.price_history import fetch_symbol_with_retries, is_cache_fresh
+from stock_screener.atomic_io import atomic_text_writer, atomic_write_text
+from stock_screener.locking import run_locked
 
 CONFIG_PATH = ROOT / "config/chart_page.json"
 SITE_DIST = ROOT / "site" / "dist"
@@ -81,16 +84,18 @@ def ensure_owned_directory(path: Path) -> Path:
 
 
 def write_text_atomic(path: Path, text: str) -> None:
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, text)
+
+
+def unique_directory_path(parent: Path, prefix: str) -> Path:
+    path = Path(tempfile.mkdtemp(dir=parent, prefix=prefix))
+    path.rmdir()
+    return path
 
 
 def promote_directory(staging_dir: Path, live_dir: Path) -> None:
     """Replace a generated asset directory after a caller has finished staging."""
-    backup_dir = live_dir.with_name(f".{live_dir.name}.old")
-    if backup_dir.exists():
-        shutil.rmtree(backup_dir)
+    backup_dir = unique_directory_path(live_dir.parent, f".{live_dir.name}.old.")
     if live_dir.exists():
         live_dir.rename(backup_dir)
     try:
@@ -105,9 +110,7 @@ def promote_directory(staging_dir: Path, live_dir: Path) -> None:
 
 def publish_html_with_assets(staging_dir: Path, live_dir: Path, html_path: Path, html_text: str) -> None:
     """Atomically publish assets + HTML, rolling assets back if HTML promotion fails."""
-    backup_dir = live_dir.with_name(f".{live_dir.name}.old")
-    if backup_dir.exists():
-        shutil.rmtree(backup_dir)
+    backup_dir = unique_directory_path(live_dir.parent, f".{live_dir.name}.old.")
     if live_dir.exists():
         live_dir.rename(backup_dir)
     try:
@@ -172,10 +175,10 @@ def sample_matches(matches: list[dict[str, str]], size: int | str, seed: int | N
 def write_shortlist(path: Path, rows: list[dict[str, str]], seed: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
-        path.write_text("")
+        atomic_write_text(path, "")
         return
     fieldnames = ["sample_seed"] + list(rows[0].keys())
-    with path.open("w", newline="", encoding="utf-8") as fh:
+    with atomic_text_writer(path, newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
@@ -323,10 +326,7 @@ def build_page(config: dict, sampled: list[dict[str, str]], seed: int) -> dict:
     output_dir = resolve_owned_output_path(SITE_DIST, config["output_dir"])
     ensure_owned_directory(output_dir)
     chart_asset_dir = resolve_owned_output_path(SITE_DIST, Path(config["output_dir"]) / "charts")
-    chart_staging_dir = resolve_owned_output_path(SITE_DIST, Path(config["output_dir"]) / ".charts.tmp")
-    if chart_staging_dir.exists():
-        shutil.rmtree(chart_staging_dir)
-    ensure_owned_directory(chart_staging_dir)
+    chart_staging_dir = Path(tempfile.mkdtemp(dir=output_dir, prefix=".charts."))
     price_dir = ROOT / config["price_dir"]
     cards = []
     skipped = []
@@ -448,4 +448,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_locked(main))

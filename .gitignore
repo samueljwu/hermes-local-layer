@@ -106,6 +106,35 @@ repo-scout/*.egg-info/
 .hermes/wiki-build.lock
 .hermes/interrupt_debug.log
 
+# Google API / OAuth integration: never stage credentials, account-specific
+# configuration, authorization callbacks, tokens, or local Calendar helpers.
+# Keep these final deny rules below all allowlist negations so future broad
+# includes cannot accidentally re-enable them.
+/.config/hermes-tasks-calendar/
+/.config/hermes-tasks-calendar/**
+/.config/gcloud/
+/.config/gcloud/**
+**/oauth-client*.json
+**/oauth-token*.json
+**/oauth_credentials*.json
+**/oauth-credentials*.json
+**/client_secret*.json
+**/client-secrets*.json
+**/credentials.json
+**/token.json
+**/application_default_credentials.json
+**/service-account*.json
+**/service_account*.json
+**/*google*credential*.json
+**/*google*token*.json
+**/*authorization-response*
+**/*oauth-callback*
+tasks/_tools/google_calendar_auth.py
+tasks/_tools/google_calendar_sync.py
+tasks/_tools/test_google_calendar_auth.py
+tasks/_tools/test_google_calendar_sync.py
+.hermes/scripts/sync_hermes_tasks_calendar.py
+
 # Do not vendor Hermes source install into this backup repo
 .hermes/hermes-agent/
 

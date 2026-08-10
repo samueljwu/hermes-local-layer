@@ -20,6 +20,14 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from stock_screener.atomic_io import atomic_write, atomic_write_text, promote_staged_bundle, unique_temp_path
+from stock_screener.locking import run_locked
+from stock_screener.owned_paths import resolve_owned_path
+
 CONFIG_PATH = ROOT / "config" / "universe_sources.json"
 RAW_DIR = ROOT / "data" / "universe" / "raw"
 PROCESSED_DIR = ROOT / "data" / "universe" / "processed"
@@ -67,11 +75,11 @@ def fetch_url(url: str, *, data: bytes | None = None, content_type: str | None =
 
 
 def download_sources(config: dict) -> dict[str, Path]:
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
     sources = config["sources"]
-
-    nasdaq_path = ROOT / sources["nasdaq"]["raw_path"]
-    nasdaq_path.write_bytes(fetch_url(sources["nasdaq"]["url"]))
+    nasdaq_path = resolve_owned_path(ROOT, sources["nasdaq"]["raw_path"], label="sources.nasdaq.raw_path")
+    nyse_path = resolve_owned_path(ROOT, sources["nyse"]["raw_path"], label="sources.nyse.raw_path")
+    nasdaq_stage = unique_temp_path(nasdaq_path, suffix=".download")
+    nyse_stage = unique_temp_path(nyse_path, suffix=".download")
 
     nyse_payload = {
         "instrumentType": "EQUITY",
@@ -81,14 +89,32 @@ def download_sources(config: dict) -> dict[str, Path]:
         "maxResultsPerPage": 10000,
         "filterToken": "",
     }
-    nyse_path = ROOT / sources["nyse"]["raw_path"]
-    nyse_path.write_bytes(
-        fetch_url(
+    try:
+        nasdaq_stage.write_bytes(fetch_url(sources["nasdaq"]["url"]))
+        nyse_stage.write_bytes(fetch_url(
             sources["nyse"]["url"],
             data=json.dumps(nyse_payload).encode("utf-8"),
             content_type="application/json",
-        )
-    )
+        ))
+        # Validate the exact bytes staged for promotion. Empty, malformed, and
+        # sparse responses never replace either prior raw provider cache.
+        nasdaq_rows = normalize_nasdaq(nasdaq_stage, sources["nasdaq"]["url"])
+        try:
+            nyse_payload_rows = json.loads(nyse_stage.read_text(encoding="utf-8", errors="replace"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"malformed NYSE raw response: {exc}") from exc
+        if not isinstance(nyse_payload_rows, list):
+            raise RuntimeError("malformed NYSE raw response: expected a list")
+        nyse_rows = normalize_nyse(nyse_stage, sources["nyse"]["url"])
+        validate_refresh_counts(config, {
+            "nasdaq_raw": len(nasdaq_rows),
+            "nyse_raw_xnys": len(nyse_rows),
+            "combined_active": len(nasdaq_rows) + len(nyse_rows),
+        })
+        promote_staged_bundle([(nasdaq_stage, nasdaq_path), (nyse_stage, nyse_path)])
+    finally:
+        nasdaq_stage.unlink(missing_ok=True)
+        nyse_stage.unlink(missing_ok=True)
 
     return {"nasdaq": nasdaq_path, "nyse": nyse_path}
 
@@ -211,21 +237,19 @@ def split_active_excluded(rows: Iterable[UniverseRow], config: dict) -> tuple[li
 
 def write_csv(path: Path, rows: Iterable[object]) -> int:
     rows = list(rows)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    if not rows:
-        tmp.write_text("", encoding="utf-8")
-        tmp.replace(path)
-        return 0
-    fieldnames = list(asdict(rows[0]).keys())
-    with tmp.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(asdict(row))
-        f.flush()
-        os.fsync(f.fileno())
-    tmp.replace(path)
+    def writer(tmp: Path) -> None:
+        if not rows:
+            tmp.write_text("", encoding="utf-8")
+            return
+        fieldnames = list(asdict(rows[0]).keys())
+        with tmp.open("w", newline="", encoding="utf-8") as f:
+            csv_writer = csv.DictWriter(f, fieldnames=fieldnames)
+            csv_writer.writeheader()
+            for row in rows:
+                csv_writer.writerow(asdict(row))
+            f.flush()
+            os.fsync(f.fileno())
+    atomic_write(path, writer)
     return len(rows)
 
 
@@ -282,16 +306,13 @@ def main() -> int:
         "counts": counts,
     }
     metadata_path = PROCESSED_DIR / "universe_metadata.json"
-    tmp_metadata_path = metadata_path.with_name(f".{metadata_path.name}.tmp")
-    tmp_metadata_path.write_text(
+    atomic_write_text(metadata_path,
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
     )
-    tmp_metadata_path.replace(metadata_path)
 
     print(json.dumps(counts, indent=2, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_locked(main))

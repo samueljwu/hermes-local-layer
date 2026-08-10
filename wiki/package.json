@@ -16,7 +16,7 @@
     "opportunities": "python3 _tools/wiki_ops.py opportunities",
     "query-review": "python3 _tools/wiki_ops.py query-review",
     "dev": "vitepress dev .",
-    "build": "mkdir -p public/assets/fonts && cp node_modules/katex/dist/katex.min.css public/assets/katex.min.css && cp node_modules/katex/dist/fonts/* public/assets/fonts/ && node .vitepress/gen-sidebar.mjs && node .vitepress/validate-wiki-links.mjs && node .vitepress/gen-semantic-graph.mjs && node .vitepress/validate-semantic-relationships.mjs && vitepress build . && cp -R public/semantic dist/semantic && cp public/wiki-graph.json dist/wiki-graph.json && mkdir -p dist/assets dist/raw/assets && cp -R public/assets/* dist/assets/ && cp -R src/raw/assets/. dist/raw/assets/",
+    "build": "python3 _tools/wiki_build.py",
     "preview": "vitepress preview ."
   },
   "devDependencies": {
