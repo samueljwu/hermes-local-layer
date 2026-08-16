@@ -20,6 +20,23 @@ def configure_tmp_paths(tmp_path):
     return root
 
 
+def test_journal_lock_rejects_symlink_without_truncating_target(tmp_path):
+    configure_tmp_paths(tmp_path)
+    target = tmp_path / 'protected.txt'
+    target.write_text('preserve me\n', encoding='utf-8')
+    journal_ops.LOCK_PATH.symlink_to(target)
+
+    try:
+        with journal_ops.file_lock():
+            pass
+    except OSError:
+        pass
+    else:
+        raise AssertionError('journal lock should reject a symlink')
+
+    assert target.read_text(encoding='utf-8') == 'preserve me\n'
+
+
 def test_validate_detects_index_count_mismatch():
     registry = [
         {'id': 'J1', 'title': 'A', 'tag': 'ideas', 'date': '2026-05-07', 'tags': [], 'status': 'active', 'original': 'a', 'entry': 'a', 'related': []},

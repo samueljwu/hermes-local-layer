@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -19,6 +20,20 @@ def load_local_ops():
 
 
 class LocalOpsTests(unittest.TestCase):
+    def test_tasks_lock_rejects_symlink_without_truncating_target(self):
+        local_ops = load_local_ops()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / 'tasks'
+            (root / '_meta').mkdir(parents=True)
+            target = Path(td) / 'protected.txt'
+            target.write_text('preserve me\n', encoding='utf-8')
+            (root / '_meta' / '.task_ops.lock').symlink_to(target)
+
+            with self.assertRaises(OSError):
+                with local_ops.tasks_lock(root):
+                    pass
+
+            self.assertEqual(target.read_text(encoding='utf-8'), 'preserve me\n')
     def test_resolve_tasks_root_defaults_to_canonical_root(self):
         local_ops = load_local_ops()
         old_tasks_root = os.environ.pop('TASKS_ROOT', None)

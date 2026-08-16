@@ -12,6 +12,7 @@ In scope:
 - `/home/hermes/wiki`
 - `/home/hermes/journal`
 - `/home/hermes/tasks`
+- `/home/hermes/task-completion-report` (generated projection; canonical sources remain under `tasks/`)
 - `/home/hermes/feed`
 - `/home/hermes/repo-scout`
 - `/home/hermes/stock-screener`
@@ -211,6 +212,8 @@ Tasks:
 - derived notes match registry
 - no stale derived notes
 - no path traversal from task fields
+- weekly completion feedback is written only through the task harness under the task lock
+- the weekly report stages a complete JSON/CSV/SVG/PNG bundle and serializes promotion
 
 Journal:
 
@@ -343,6 +346,10 @@ Tasks:
 
 ```bash
 /home/hermes/tasks/_tools/task_ops.py validate
+python3 /home/hermes/tasks/_tools/test_task_ops.py
+/home/hermes/.hermes/scripts/weekly_task_completion_report.sh
+test -s /home/hermes/task-completion-report/latest_report.json
+test -s /home/hermes/task-completion-report/weekly_completed_tasks_last_10_weeks.png
 ```
 
 Feed:

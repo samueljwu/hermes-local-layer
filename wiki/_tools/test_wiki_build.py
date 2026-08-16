@@ -27,6 +27,24 @@ def test_nonblocking_build_lock_rejects_concurrent_owner(tmp_path):
                 pass
 
 
+def test_build_lock_rejects_symlink_without_truncating_target(tmp_path):
+    target = tmp_path / "protected.txt"
+    target.write_text("preserve me\n", encoding="utf-8")
+    lock_path = tmp_path / "wiki.lock"
+    lock_path.symlink_to(target)
+
+    with mock.patch.object(wiki_build, "LOCK_FILE", lock_path):
+        try:
+            with wiki_build.build_lock():
+                pass
+        except OSError:
+            pass
+        else:
+            raise AssertionError("wiki build lock should reject a symlink")
+
+    assert target.read_text(encoding="utf-8") == "preserve me\n"
+
+
 def test_promote_replaces_complete_dist_and_removes_backup(tmp_path):
     dist = tmp_path / "dist"
     staging = Path(tempfile.mkdtemp(prefix=".dist.build.", dir=tmp_path))

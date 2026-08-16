@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import stat
 import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -19,7 +20,16 @@ LOCK_PATH = DEFAULT_OUT_DIR / ".repo-scout.lock"
 @contextmanager
 def repo_scout_lock():
     DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    with LOCK_PATH.open("w", encoding="utf-8") as f:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(LOCK_PATH, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"refusing non-regular Repo Scout lock: {LOCK_PATH}")
+        f = os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
             yield

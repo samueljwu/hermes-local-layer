@@ -7,6 +7,7 @@ import fcntl
 import html
 import json
 import os
+import stat
 import tempfile
 from contextlib import contextmanager
 from collections import defaultdict
@@ -389,7 +390,16 @@ def render_page(rows: list[dict[str, str]], generated_at: dt.datetime | None = N
 @contextmanager
 def feed_lock():
     FEED_ROOT.mkdir(parents=True, exist_ok=True)
-    with LOCK_PATH.open('w', encoding='utf-8') as f:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(LOCK_PATH, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f'refusing non-regular feed lock: {LOCK_PATH}')
+        f = os.fdopen(fd, 'r+', encoding='utf-8')
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
             yield

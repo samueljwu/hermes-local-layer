@@ -7,6 +7,7 @@ import fcntl
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,6 +23,65 @@ def load_module():
 
 
 class LocalLayerBackupTests(unittest.TestCase):
+    def test_remote_git_commands_reset_inherited_helpers_before_network(self):
+        mod = load_module()
+        calls = []
+
+        def capture(args, **kwargs):
+            calls.append((args, kwargs))
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with mock.patch.object(mod.shutil, "which", return_value="/usr/bin/gh"), mock.patch.object(
+            mod, "run", side_effect=capture
+        ):
+            mod.git_with_github_credentials(["fetch", "origin", "main"], cwd=Path("/tmp/example"))
+
+        remote_args = calls[-1][0]
+        self.assertEqual(
+            remote_args[:5],
+            ["git", "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"],
+        )
+        self.assertEqual(remote_args[5:], ["fetch", "origin", "main"])
+
+    def test_open_lock_rejects_symlink_without_truncating_target(self):
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            target = root / "protected.txt"
+            target.write_text("preserve me\n", encoding="utf-8")
+            lock = root / "backup.lock"
+            lock.symlink_to(target)
+
+            with self.assertRaises(OSError):
+                mod.open_lock(lock)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "preserve me\n")
+
+    def test_configure_repo_credentials_resets_inherited_helpers(self):
+        mod = load_module()
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            subprocess.run(["git", "init", "-q", str(work)], check=True)
+            subprocess.run(["git", "config", "--local", "credential.helper", "store"], cwd=work, check=True)
+
+            original_run = mod.run
+
+            def skip_auth_status(args, **kwargs):
+                if args[:3] == ["gh", "auth", "status"]:
+                    return subprocess.CompletedProcess(args, 0, "", "")
+                return original_run(args, **kwargs)
+
+            with mock.patch.object(mod.shutil, "which", return_value="/usr/bin/gh"), mock.patch.object(
+                mod, "run", side_effect=skip_auth_status
+            ):
+                mod.configure_repo_credentials(work)
+
+            helpers = subprocess.check_output(
+                ["git", "config", "--local", "--get-all", "credential.helper"],
+                cwd=work,
+                text=True,
+            ).splitlines()
+            self.assertEqual(helpers, ["", "!gh auth git-credential"])
     def test_public_readme_describes_filtered_mirror_not_private_backup(self):
         mod = load_module()
         with tempfile.TemporaryDirectory() as td:

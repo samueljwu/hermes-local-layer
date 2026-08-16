@@ -67,10 +67,14 @@ class BackupDocumentationGuardTests(unittest.TestCase):
 
     def test_cron_runtime_bookkeeping_change_does_not_trigger_docs(self):
         guard = load_guard()
-        before = {"jobs": [{"id": "one", "name": "Daily", "script": "run.py", "last_run_at": None,
-                            "repeat": {"completed": 1, "times": None}}]}
-        after = {"jobs": [{"id": "one", "name": "Daily", "script": "run.py", "last_run_at": "later",
-                           "repeat": {"completed": 2, "times": None}}]}
+        before = {"updated_at": "earlier", "jobs": [
+            {"id": "one", "name": "Daily", "script": "run.py", "last_run_at": None,
+             "repeat": {"completed": 1, "times": None}},
+        ]}
+        after = {"updated_at": "later", "jobs": [
+            {"id": "one", "name": "Daily", "script": "run.py", "last_run_at": "later",
+             "repeat": {"completed": 2, "times": None}},
+        ]}
         temporary, repo = self._cron_repo(before, after)
         with temporary:
             old_repo = guard.REPO

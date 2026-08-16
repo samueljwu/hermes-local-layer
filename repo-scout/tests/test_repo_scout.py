@@ -4,6 +4,10 @@ import unittest
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
+
+import repo_scout.cli as cli_mod
+import repo_scout.feedback as feedback_mod
 
 from repo_scout.api_budget import estimate_api_budget
 from repo_scout.cli import DEFAULT_OUT_DIR, run_scout, resolve_feedback_path, resolve_output_dir
@@ -16,6 +20,28 @@ from repo_scout.ranking import rank_repo
 
 
 class RepoScoutTests(unittest.TestCase):
+    def test_shared_locks_reject_symlinks_without_truncating_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "out"
+            out.mkdir()
+            target = root / "protected.txt"
+            target.write_text("preserve me\n", encoding="utf-8")
+            lock = out / ".repo-scout.lock"
+            lock.symlink_to(target)
+
+            with mock.patch.object(cli_mod, "DEFAULT_OUT_DIR", out):
+                with self.assertRaises(OSError):
+                    with cli_mod._scout_lock(out):
+                        pass
+            with mock.patch.object(feedback_mod, "DEFAULT_OUT_DIR", out), mock.patch.object(
+                feedback_mod, "LOCK_PATH", lock
+            ):
+                with self.assertRaises(OSError):
+                    with feedback_mod.repo_scout_lock():
+                        pass
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "preserve me\n")
     def test_has_min_commits_each_month_requires_every_month(self):
         commit_dates = [
             "2026-05-01T00:00:00Z", "2026-05-02T00:00:00Z", "2026-05-03T00:00:00Z", "2026-05-04T00:00:00Z", "2026-05-05T00:00:00Z",

@@ -11,6 +11,21 @@ SCRIPT = Path(__file__).with_name("backup_to_github.sh")
 
 
 class BackupToGithubTests(unittest.TestCase):
+    def test_rejects_symlinked_lock_without_truncating_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            target = root / "protected.txt"
+            target.write_text("preserve me\n", encoding="utf-8")
+            lock = root / "backup.lock"
+            lock.symlink_to(target)
+            env = os.environ.copy()
+            env["HERMES_BACKUP_LOCK"] = str(lock)
+
+            proc = subprocess.run([str(SCRIPT)], env=env, text=True, capture_output=True, check=False)
+
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("Refusing symlinked backup lock", proc.stderr)
+            self.assertEqual(target.read_text(encoding="utf-8"), "preserve me\n")
     def test_pushes_existing_ahead_commit_when_worktree_has_no_changes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

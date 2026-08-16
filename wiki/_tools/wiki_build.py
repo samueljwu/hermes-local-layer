@@ -13,6 +13,7 @@ import contextlib
 import fcntl
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,7 +26,16 @@ DIST = WIKI_ROOT / "dist"
 @contextlib.contextmanager
 def build_lock(nonblocking: bool = False):
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with LOCK_FILE.open("w", encoding="utf-8") as lock:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(LOCK_FILE, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"refusing non-regular wiki build lock: {LOCK_FILE}")
+        lock = os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+    with lock:
         flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
         fcntl.flock(lock, flags)
         try:

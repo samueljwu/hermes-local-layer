@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import json
 import os
+import stat
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -47,7 +48,16 @@ def resolve_feedback_path(path: Path | None, out_dir: Path) -> Path | None:
 def _scout_lock(out_dir: Path):
     DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = DEFAULT_OUT_DIR / ".repo-scout.lock"
-    with lock_path.open("w", encoding="utf-8") as f:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"refusing non-regular Repo Scout lock: {lock_path}")
+        f = os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+    with f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
             yield

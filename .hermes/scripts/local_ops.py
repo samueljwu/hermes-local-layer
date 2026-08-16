@@ -13,6 +13,7 @@ import tempfile
 import time
 import contextlib
 import fcntl
+import stat
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -47,7 +48,16 @@ def tasks_lock(root: Path | None = None):
     """Take the task-system lock shared by task_ops and operational consumers."""
     lock_path = (root or resolve_tasks_root()) / "_meta" / ".task_ops.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("w", encoding="utf-8") as lock:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError(f"refusing non-regular task lock: {lock_path}")
+        lock = os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+    with lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             yield

@@ -6,7 +6,7 @@ cd "$REPO"
 
 HARNESS=${HERMES_BACKUP_HARNESS:-/home/hermes/.hermes/scripts/backup_security_harness.py}
 DOC_GUARD=${HERMES_BACKUP_DOC_GUARD:-/home/hermes/.hermes/scripts/backup_documentation_guard.py}
-LOCK=${HERMES_BACKUP_LOCK:-/tmp/hermes-knowledge-backup.lock}
+LOCK=${HERMES_BACKUP_LOCK:-/home/hermes/.hermes/state/locks/knowledge-backup.lock}
 MODE=manual
 
 usage() {
@@ -53,7 +53,14 @@ case "$MODE" in
     ;;
 esac
 
-exec 9>"$LOCK"
+LOCK_DIR=$(dirname "$LOCK")
+mkdir -p "$LOCK_DIR"
+chmod 700 "$LOCK_DIR"
+if [[ -L "$LOCK" ]]; then
+  echo "Refusing symlinked backup lock: $LOCK" >&2
+  exit 1
+fi
+exec 9>>"$LOCK"
 if ! flock -n 9; then
   echo "Another Hermes knowledge backup is already running; exiting."
   exit 0
