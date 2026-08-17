@@ -51,6 +51,11 @@ Google Calendar authorization:
   ```bash
   ssh -L 53682:127.0.0.1:53682 hermes@<hermes-host> /home/hermes/tasks/_tools/google_calendar_auth.py authorize
   ```
+- Recover an expired or revoked refresh token without sending credentials through chat and without creating a replacement calendar:
+  ```bash
+  ssh -L 53682:127.0.0.1:53682 hermes@<hermes-host> /home/hermes/tasks/_tools/google_calendar_auth.py reauthorize
+  ```
+  Open the printed Google URL locally and select the account that owns the existing `Hermes Tasks` calendar. The old token remains in place until the replacement token can read and verify the exact configured calendar ID, name, and timezone; selecting another account therefore fails closed.
 - The authorization stage creates and verifies the dedicated `Hermes Tasks` calendar. Task-event synchronization is a separate stage.
 - Read-only reconciliation preview: `/home/hermes/tasks/_tools/google_calendar_sync.py`
 - The default invocation is read-only and lists proposed Calendar actions.
