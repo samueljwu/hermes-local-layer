@@ -46,6 +46,11 @@ class BackupDocumentationGuardTests(unittest.TestCase):
         guard = load_guard()
         self.assertTrue(guard.is_trigger(".hermes/scripts/scheduled_backup.sh"))
 
+    def test_wiki_chronology_ledger_is_state_only_not_doc_trigger(self):
+        guard = load_guard()
+        self.assertFalse(guard.is_trigger("wiki/src/_meta/chronology-audit.json"))
+        self.assertTrue(guard.is_trigger("wiki/_tools/wiki_ops.py"))
+
     def test_staged_curator_backups_pass_without_doc_update(self):
         guard = load_guard()
         with tempfile.TemporaryDirectory() as td:
