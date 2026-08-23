@@ -22,6 +22,7 @@ In scope:
 Out of scope by default:
 
 - `/home/hermes/projects/*`
+- `/home/hermes/task-completion-analysis` (superseded ignored prototype; maintained task reporting lives under `tasks/` and generated `task-completion-report/`)
 
 Project workspaces are isolated future/public repositories. A full-system Hermes review may verify that `projects/` is ignored and excluded, but must not inspect, stage, validate, or modify project contents unless the user explicitly requests a project-scoped review.
 
@@ -179,6 +180,8 @@ git remote -v
 ```
 
 Do not assume the working tree is clean. Preserve unrelated local work.
+
+The documentation guard also inventories non-hidden top-level directories so a new first-class system cannot disappear behind the repository's deny-by-default `.gitignore`; every new root must be explicitly classified before backup.
 
 Read or inspect:
 

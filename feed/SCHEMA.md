@@ -92,6 +92,7 @@ The staleness rule is a ranking policy, not a source removal policy. Approved ol
 - `_meta/information_sources.json` — canonical candidate/read-only source list rendered into pinned Discord #feed message
 - `_meta/information_sources_message_state.json` — exclusive Discord message ID/hash state for the pinned source-list updater; updates are serialized with `.feed_ops.lock`, whose owners must open it without following symlinks and verify it is a regular file, and persisted by unique temporary file + file/directory `fsync` + `os.replace`; the updater must never copy `message_id` into or rewrite a stale `_meta/information_sources.json`
 - `runs/YYYY-MM-DD-HHMM.md` — rendered digest for each current twice-daily run; older `runs/YYYY-MM-DD.md` files may exist from the previous daily schedule
+- Cron delivery uses `/home/hermes/.hermes/scripts/feed_digest.sh` with `no_agent=true`. The script executes the harness directly and its stdout is the delivered digest; externally sourced candidate text is never handed to an autonomous cron agent with file/terminal tools.
 - `/home/hermes/homepage/dist/feed/index.html` — generated static HTML picks index, updated by successful `digest` runs and manually by `feed_ops.py render-page`; it shows the most recent 60 picks expanded, groups rows by date, provides client-side filtering over date/title only, and compacts older picks into collapsed yearly archive sections
 
 ## Health and Balance Summary

@@ -38,6 +38,10 @@ wiki/.vitepress/.temp/
 # Each /home/hermes/projects/* folder is intended to become its own repo.
 projects/
 projects/**
+# Superseded local task-completion prototype. The maintained generated
+# projection is task-completion-report/ and its durable source lives in tasks/.
+task-completion-analysis/
+task-completion-analysis/**
 stock-screener/.env
 stock-screener/.env.*
 stock-screener/**/*secret*

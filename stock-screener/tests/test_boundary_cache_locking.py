@@ -19,6 +19,23 @@ from stock_screener import locking
 
 
 class BoundaryCacheLockingTests(unittest.TestCase):
+    def test_project_lock_rejects_symlink_without_creating_external_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            lock_path = root / "test.lock"
+            outside = root / "outside-created.txt"
+            lock_path.symlink_to(outside)
+            old_path, old_token = locking.LOCK_PATH, locking.LOCK_TOKEN
+            locking.LOCK_PATH = lock_path
+            locking.LOCK_TOKEN = str(lock_path.resolve())
+            try:
+                with self.assertRaises(OSError):
+                    with locking.stock_screener_lock():
+                        pass
+            finally:
+                locking.LOCK_PATH, locking.LOCK_TOKEN = old_path, old_token
+            self.assertFalse(outside.exists())
+
     def test_universe_sparse_download_preserves_both_raw_caches(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -11,7 +11,7 @@ Allowed writes:
 - `/home/hermes/repo-scout/out/**`
 - project source/docs under `/home/hermes/repo-scout/**` when intentionally developing the tool
 
-Normal CLI output is constrained by code: `--out` must resolve under `/home/hermes/repo-scout/out/`, and `--feedback` must resolve under the selected output directory.
+Normal CLI output is constrained by code: both `--out` and `--feedback` must resolve under `/home/hermes/repo-scout/out/`. Feedback may intentionally use the shared canonical `out/feedback.jsonl` while a selected run output lives in a subdirectory such as `out/slash/`.
 
 Disallowed writes, not overrideable:
 
@@ -50,7 +50,7 @@ Optional reads:
 - `max_api_repos_for_commit_check`: safety cap for expensive per-repo checks.
 - `shortlist_size`: max final ranked repos.
 - `cache_ttl_hours`: GitHub GET cache time.
-- `feedback_path` is not a YAML config field; pass feedback explicitly with CLI `--feedback feedback.jsonl` (resolved under the selected output directory) or use the Discord plugin defaults.
+- `feedback_path` is not a YAML config field; pass feedback explicitly with CLI `--feedback feedback.jsonl` (resolved under the canonical `out/` tree) or use the Discord plugin defaults.
 - `allowed_licenses`: SPDX IDs allowed. Empty list means no license filter.
 - `contribution_labels`: issue labels that suggest approachable contributions.
 - `interest_roots`: explicit local read-only paths for personalization.

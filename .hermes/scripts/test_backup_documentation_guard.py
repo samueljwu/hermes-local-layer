@@ -20,6 +20,20 @@ def load_guard():
 
 
 class BackupDocumentationGuardTests(unittest.TestCase):
+    def test_unknown_top_level_directory_is_detected_even_when_untracked(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".git").mkdir()
+            (repo / "wiki").mkdir()
+            (repo / "new-first-class-system").mkdir()
+            old_repo = guard.REPO
+            try:
+                setattr(guard, "REPO", repo)
+                self.assertEqual(guard.unknown_top_level_directories(), ["new-first-class-system"])
+            finally:
+                setattr(guard, "REPO", old_repo)
+
     def _cron_repo(self, before: dict, after: dict):
         import json
         temporary = tempfile.TemporaryDirectory()

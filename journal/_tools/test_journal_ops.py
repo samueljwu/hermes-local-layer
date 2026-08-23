@@ -87,6 +87,24 @@ def test_regenerate_removes_stale_same_id_entry_in_wrong_folder(tmp_path):
     assert not stale.exists()
 
 
+def test_regenerate_rejects_symlinked_tag_directory_without_deleting_external_file(tmp_path):
+    root = configure_tmp_paths(tmp_path)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    victim = outside / 'J9.md'
+    victim.write_text('preserve me', encoding='utf-8')
+    (root / 'linked').symlink_to(outside, target_is_directory=True)
+
+    try:
+        journal_ops.regenerate_entries([], root=root)
+    except ValueError as exc:
+        assert 'outside journal root' in str(exc)
+    else:
+        raise AssertionError('symlinked journal tag directory should be rejected')
+
+    assert victim.read_text(encoding='utf-8') == 'preserve me'
+
+
 def test_validate_detects_invalid_status_and_stale_entry_file(tmp_path):
     root = configure_tmp_paths(tmp_path)
     registry = [
