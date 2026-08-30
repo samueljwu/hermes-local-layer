@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def load_updater():
@@ -15,6 +16,130 @@ def load_updater():
 
 
 class FeedSourcePinStateTests(unittest.TestCase):
+    def test_save_json_rejects_symlinked_ancestor_without_touching_target(self):
+        updater = load_updater()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            outside = root / "outside"
+            (outside / "feed" / "_meta").mkdir(parents=True)
+            protected = outside / "feed" / "_meta" / "state.json"
+            protected.write_text("preserve me\n", encoding="utf-8")
+            ancestor = root / "linked-ancestor"
+            ancestor.symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                updater.save_json(ancestor / "feed" / "_meta" / "state.json", {"changed": True})
+
+            self.assertEqual(protected.read_text(encoding="utf-8"), "preserve me\n")
+
+    def test_save_json_parent_swap_stays_bound_to_opened_hierarchy(self):
+        updater = load_updater()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            feed = root / "safe" / "feed"
+            meta = feed / "_meta"
+            meta.mkdir(parents=True)
+            outside = root / "outside"
+            (outside / "_meta").mkdir(parents=True)
+            protected = outside / "_meta" / "state.json"
+            protected.write_text("preserve me\n", encoding="utf-8")
+            detached = root / "safe" / "detached-feed"
+            real_open = os.open
+            swapped = False
+
+            def swapping_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                fd = real_open(path, flags, mode, dir_fd=dir_fd)
+                if path == "_meta" and dir_fd is not None and not swapped:
+                    swapped = True
+                    feed.rename(detached)
+                    feed.symlink_to(outside, target_is_directory=True)
+                return fd
+
+            with mock.patch.object(updater.os, "open", side_effect=swapping_open):
+                updater.save_json(meta / "state.json", {"safe": True})
+
+            self.assertTrue(swapped)
+            self.assertEqual(json.loads((detached / "_meta" / "state.json").read_text()), {"safe": True})
+            self.assertEqual(protected.read_text(encoding="utf-8"), "preserve me\n")
+
+    def test_feed_lock_rejects_symlinked_ancestor(self):
+        updater = load_updater()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            outside = root / "outside"
+            (outside / "feed").mkdir(parents=True)
+            ancestor = root / "linked-ancestor"
+            ancestor.symlink_to(outside, target_is_directory=True)
+            setattr(updater, "LOCK_PATH", ancestor / "feed" / ".feed_ops.lock")
+
+            with self.assertRaises(OSError):
+                with updater.feed_lock():
+                    self.fail("symlinked ancestor unexpectedly accepted")
+
+            self.assertFalse((outside / "feed" / ".feed_ops.lock").exists())
+
+    def test_feed_lock_parent_swap_stays_bound_to_opened_hierarchy(self):
+        updater = load_updater()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            feed = root / "safe" / "feed"
+            feed.mkdir(parents=True)
+            outside = root / "outside"
+            outside.mkdir()
+            detached = root / "safe" / "detached-feed"
+            setattr(updater, "LOCK_PATH", feed / ".feed_ops.lock")
+            real_open = os.open
+            swapped = False
+
+            def swapping_open(path, flags, mode=0o777, *, dir_fd=None):
+                nonlocal swapped
+                fd = real_open(path, flags, mode, dir_fd=dir_fd)
+                if path == "feed" and dir_fd is not None and not swapped:
+                    swapped = True
+                    feed.rename(detached)
+                    feed.symlink_to(outside, target_is_directory=True)
+                return fd
+
+            with mock.patch.object(updater.os, "open", side_effect=swapping_open):
+                with updater.feed_lock():
+                    self.assertTrue(swapped)
+
+            self.assertTrue((detached / ".feed_ops.lock").is_file())
+            self.assertFalse((outside / ".feed_ops.lock").exists())
+
+    def test_save_json_rejects_symlinked_state_parent_without_touching_target(self):
+        updater = load_updater()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            outside = root / "outside"
+            outside.mkdir()
+            protected = outside / "state.json"
+            protected.write_text("preserve me\n", encoding="utf-8")
+            linked_parent = root / "linked-meta"
+            linked_parent.symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                updater.save_json(linked_parent / "state.json", {"changed": True})
+
+            self.assertEqual(protected.read_text(encoding="utf-8"), "preserve me\n")
+            self.assertEqual(list(outside.iterdir()), [protected])
+
+    def test_save_json_replaces_destination_symlink_not_its_target(self):
+        updater = load_updater()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            protected = root / "protected.json"
+            protected.write_text("preserve me\n", encoding="utf-8")
+            state = root / "state.json"
+            state.symlink_to(protected)
+
+            updater.save_json(state, {"safe": True})
+
+            self.assertFalse(state.is_symlink())
+            self.assertEqual(json.loads(state.read_text()), {"safe": True})
+            self.assertEqual(protected.read_text(encoding="utf-8"), "preserve me\n")
+
     def test_new_message_id_is_written_only_to_atomic_state_under_feed_lock(self):
         updater = load_updater()
         with tempfile.TemporaryDirectory() as td:

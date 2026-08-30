@@ -34,6 +34,37 @@ class LocalOpsTests(unittest.TestCase):
                     pass
 
             self.assertEqual(target.read_text(encoding='utf-8'), 'preserve me\n')
+
+    def test_tasks_lock_rejects_symlinked_parent_without_creating_external_lock(self):
+        local_ops = load_local_ops()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / 'tasks'
+            root.mkdir()
+            external = Path(td) / 'external-meta'
+            external.mkdir()
+            (root / '_meta').symlink_to(external, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                with local_ops.tasks_lock(root):
+                    pass
+
+            self.assertFalse((external / '.task_ops.lock').exists())
+
+    def test_atomic_json_write_rejects_symlinked_parent_without_touching_external_target(self):
+        local_ops = load_local_ops()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / 'state'
+            root.mkdir()
+            external = Path(td) / 'external-state'
+            external.mkdir()
+            target = external / 'payload.json'
+            target.write_text('{"preserve": true}\n', encoding='utf-8')
+            (root / 'linked').symlink_to(external, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                local_ops.atomic_json_write(root / 'linked' / 'payload.json', {'changed': True})
+
+            self.assertEqual(target.read_text(encoding='utf-8'), '{"preserve": true}\n')
     def test_resolve_tasks_root_defaults_to_canonical_root(self):
         local_ops = load_local_ops()
         old_tasks_root = os.environ.pop('TASKS_ROOT', None)

@@ -7,7 +7,9 @@ cd "$REPO"
 HARNESS=${HERMES_BACKUP_HARNESS:-/home/hermes/.hermes/scripts/backup_security_harness.py}
 DOC_GUARD=${HERMES_BACKUP_DOC_GUARD:-/home/hermes/.hermes/scripts/backup_documentation_guard.py}
 LOCK=${HERMES_BACKUP_LOCK:-/home/hermes/.hermes/state/locks/knowledge-backup.lock}
+LOCK_HELPER=/home/hermes/.hermes/scripts/backup_lock_exec.py
 MODE=manual
+ORIGINAL_ARGS=("$@")
 
 usage() {
   cat <<'EOF'
@@ -53,17 +55,16 @@ case "$MODE" in
     ;;
 esac
 
-LOCK_DIR=$(dirname "$LOCK")
-mkdir -p "$LOCK_DIR"
-chmod 700 "$LOCK_DIR"
-if [[ -L "$LOCK" ]]; then
-  echo "Refusing symlinked backup lock: $LOCK" >&2
-  exit 1
+# The helper opens each lock-directory component and the lock itself with
+# O_NOFOLLOW, verifies the opened object by fd, takes flock, then execs this
+# script with that locked fd inherited. A pathname pre-check here would leave a
+# symlink-swap race between the check and shell redirection.
+if [[ -z "${HERMES_BACKUP_LOCK_FD:-}" ]]; then
+  exec "$LOCK_HELPER" "$LOCK" -- "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
 fi
-exec 9>>"$LOCK"
-if ! flock -n 9; then
-  echo "Another Hermes knowledge backup is already running; exiting."
-  exit 0
+if ! "$LOCK_HELPER" --validate "$LOCK" "$HERMES_BACKUP_LOCK_FD"; then
+  echo "Refusing to continue without a verified inherited backup lock." >&2
+  exit 1
 fi
 
 if [[ ! -x "$HARNESS" ]]; then

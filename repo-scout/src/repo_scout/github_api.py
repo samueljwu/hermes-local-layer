@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import tempfile
 import time
 import urllib.error
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ScoutConfig
+from .secure_fs import SecureDirectory
 
 GITHUB_API = "https://api.github.com"
 _CACHE_MISS = object()
@@ -137,7 +139,10 @@ def _request_kind(path_or_url: str) -> str:
     return "core"
 
 
-def _atomic_write_json(path: Path, data: Any) -> None:
+def _atomic_write_json(path: Path, data: Any, directory: SecureDirectory | None = None) -> None:
+    if directory is not None:
+        directory.atomic_write_json(path.name, data)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:
@@ -200,9 +205,11 @@ class GitHubClient:
         max_rate_limit_sleep: int = 75,
         search_request_interval: float | None = None,
         core_request_interval: float = 0.5,
+        cache_directory: SecureDirectory | None = None,
     ):
         self.token = resolve_github_token(token)
         self.cache_dir = Path(cache_dir).expanduser() if cache_dir else None
+        self.cache_directory = cache_directory
         self.cache_ttl = cache_ttl_hours * 3600
         self.max_rate_limit_sleep = max_rate_limit_sleep
         # Authenticated GitHub Search allows 30 requests/minute; unauthenticated
@@ -210,7 +217,7 @@ class GitHubClient:
         if search_request_interval is None:
             search_request_interval = 2.2 if self.token else 6.2
         self.pacer = RequestPacer(search_interval=search_request_interval, core_interval=core_request_interval)
-        if self.cache_dir:
+        if self.cache_dir and self.cache_directory is None:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -242,13 +249,24 @@ class GitHubClient:
         return self.cache_dir / f"{encoded}.json"
 
     def _read_fresh_cache(self, path: Path) -> Any:
-        if not path.exists() or time.time() - path.stat().st_mtime >= self.cache_ttl:
+        if self.cache_directory is not None:
+            try:
+                info = self.cache_directory.stat_file(path.name)
+                if not stat.S_ISREG(info.st_mode) or time.time() - info.st_mtime >= self.cache_ttl:
+                    return _CACHE_MISS
+            except FileNotFoundError:
+                return _CACHE_MISS
+        elif not path.exists() or time.time() - path.stat().st_mtime >= self.cache_ttl:
             return _CACHE_MISS
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            text = self.cache_directory.read_text(path.name) if self.cache_directory is not None else path.read_text(encoding="utf-8")
+            return json.loads(text)
         except (json.JSONDecodeError, OSError):
             try:
-                path.unlink()
+                if self.cache_directory is not None:
+                    self.cache_directory.unlink(path.name)
+                else:
+                    path.unlink()
             except OSError:
                 pass
             return _CACHE_MISS
@@ -275,7 +293,7 @@ class GitHubClient:
             if legacy_cache_path and legacy_cache_path != cache_path:
                 cached = self._read_fresh_cache(legacy_cache_path)
                 if cached is not _CACHE_MISS:
-                    _atomic_write_json(cache_path, cached)
+                    _atomic_write_json(cache_path, cached, self.cache_directory)
                     return cached
 
         attempts = 0
@@ -322,7 +340,7 @@ class GitHubClient:
             except urllib.error.URLError as err:
                 raise GitHubAPIError(status=None, reason="URL error", url=url, message=str(err.reason)) from err
         if cache_path:
-            _atomic_write_json(cache_path, data)
+            _atomic_write_json(cache_path, data, self.cache_directory)
         return data
 
 

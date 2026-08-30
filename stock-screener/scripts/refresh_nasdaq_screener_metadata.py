@@ -20,13 +20,13 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from stock_screener.owned_paths import resolve_owned_path
-from stock_screener.atomic_io import atomic_write, atomic_write_text
+from stock_screener.atomic_io import atomic_write, atomic_write_text, stage_and_promote_bundle
 from stock_screener.locking import run_locked
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -224,22 +224,50 @@ def normalize_row(raw: dict, exchange: str, source: str) -> MetadataRow | None:
 
 def write_csv(path: Path, rows: Iterable[object]) -> int:
     rows = list(rows)
-
-    def write_temp(tmp: Path) -> None:
-        if not rows:
-            tmp.write_text("", encoding="utf-8")
-            return
-        fieldnames = list(asdict(rows[0]).keys()) if hasattr(rows[0], "__dataclass_fields__") else list(rows[0].keys())
-        with tmp.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(asdict(row) if hasattr(row, "__dataclass_fields__") else row)
-            f.flush()
-            os.fsync(f.fileno())
-
-    atomic_write(path, write_temp)
+    atomic_write(path, lambda tmp: write_csv_file(tmp, rows))
     return len(rows)
+
+
+def write_csv_file(path: Path, rows: Iterable[object]) -> None:
+    rows = list(rows)
+    if not rows:
+        path.write_text("", encoding="utf-8")
+        return
+    fieldnames = list(asdict(rows[0]).keys()) if hasattr(rows[0], "__dataclass_fields__") else list(rows[0].keys())
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(asdict(row) if hasattr(row, "__dataclass_fields__") else row)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def publish_processed_outputs(
+    *,
+    paths: dict[str, Path],
+    metadata_rows: list[MetadataRow],
+    joined_rows: list[dict[str, str]],
+    sector_rows: list[dict[str, str | int]],
+    industry_rows: list[dict[str, str | int]],
+    country_rows: list[dict[str, str | int]],
+    metadata: dict,
+) -> None:
+    ordered = [
+        (paths["metadata.csv"], metadata_rows),
+        (paths["joined.csv"], joined_rows),
+        (paths["sector.csv"], sector_rows),
+        (paths["industry.csv"], industry_rows),
+        (paths["country.csv"], country_rows),
+    ]
+    writes: list[tuple[Path, Callable[[Path], object]]] = [
+        (path, lambda stage, rows=rows: write_csv_file(stage, rows)) for path, rows in ordered
+    ]
+    writes.append((
+        paths["refresh.json"],
+        lambda stage: stage.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"),
+    ))
+    stage_and_promote_bundle(writes)
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -297,7 +325,14 @@ def summary_rows(rows: list[dict[str, str]], field: str) -> list[dict[str, str |
 def main() -> int:
     config = load_config()
     raw_dir = resolve_owned_path(ROOT, config["raw_dir"], label="raw_dir")
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    output_paths = {
+        "metadata.csv": resolve_owned_path(ROOT, config["processed_metadata_path"], label="processed_metadata_path"),
+        "joined.csv": resolve_owned_path(ROOT, config["joined_universe_path"], label="joined_universe_path"),
+        "sector.csv": resolve_owned_path(ROOT, config["sector_summary_path"], label="sector_summary_path"),
+        "industry.csv": resolve_owned_path(ROOT, config["industry_summary_path"], label="industry_summary_path"),
+        "country.csv": resolve_owned_path(ROOT, config["country_summary_path"], label="country_summary_path"),
+        "refresh.json": resolve_owned_path(ROOT, config["metadata_path"], label="metadata_path"),
+    }
 
     pushed_at = github_repo_pushed_at(config)
     age_hours = source_age_hours(pushed_at)
@@ -329,11 +364,7 @@ def main() -> int:
             f"Refusing to promote metadata refresh with missing metadata fraction {missing_fraction:.3f} > {max_missing_fraction:.3f}"
         )
 
-    metadata_count = write_csv(resolve_owned_path(ROOT, config["processed_metadata_path"], label="processed_metadata_path"), all_rows)
-    joined_count = write_csv(resolve_owned_path(ROOT, config["joined_universe_path"], label="joined_universe_path"), joined)
-    write_csv(resolve_owned_path(ROOT, config["sector_summary_path"], label="sector_summary_path"), summary_rows(joined, "sector"))
-    write_csv(resolve_owned_path(ROOT, config["industry_summary_path"], label="industry_summary_path"), summary_rows(joined, "industry"))
-    write_csv(resolve_owned_path(ROOT, config["country_summary_path"], label="country_summary_path"), summary_rows(joined, "country"))
+    metadata_count = len(all_rows)
 
     metadata = {
         "refreshed_at_utc": utc_now().isoformat(),
@@ -353,9 +384,15 @@ def main() -> int:
             "metadata_path": config["metadata_path"],
         },
     }
-    metadata_path = resolve_owned_path(ROOT, config["metadata_path"], label="metadata_path")
-    metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(metadata_path, json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+    publish_processed_outputs(
+        paths=output_paths,
+        metadata_rows=all_rows,
+        joined_rows=joined,
+        sector_rows=summary_rows(joined, "sector"),
+        industry_rows=summary_rows(joined, "industry"),
+        country_rows=summary_rows(joined, "country"),
+        metadata=metadata,
+    )
     print(json.dumps(metadata, indent=2, sort_keys=True))
     return 0 if missing_count < joined_count else 1
 

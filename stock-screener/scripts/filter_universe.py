@@ -143,7 +143,6 @@ def main() -> int:
         "config_path": str(CONFIG_PATH.relative_to(ROOT)),
     }
     summary_path = resolve_owned_path(ROOT, config["summary_path"], label="summary_path")
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(summary_path, json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

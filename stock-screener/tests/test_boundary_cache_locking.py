@@ -178,12 +178,12 @@ with locking.stock_screener_lock():
             second_stage.write_text("new-second", encoding="utf-8")
             real_replace = os.replace
             calls = 0
-            def fail_promotion_and_rollback(src, dst):
+            def fail_promotion_and_rollback(src, dst, **kwargs):
                 nonlocal calls
                 calls += 1
                 if calls in {4, 5}:
                     raise OSError("injected replace failure")
-                return real_replace(src, dst)
+                return real_replace(src, dst, **kwargs)
             with mock.patch("stock_screener.atomic_io.os.replace", side_effect=fail_promotion_and_rollback):
                 with self.assertRaisesRegex(RuntimeError, "rollback was incomplete"):
                     promote_staged_bundle([(first_stage, first), (second_stage, second)])

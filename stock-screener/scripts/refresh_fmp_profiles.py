@@ -30,7 +30,7 @@ from urllib.request import Request, urlopen
 
 from stock_screener.symbols import normalize_symbol, safe_symbol_path
 from stock_screener.owned_paths import resolve_owned_path
-from stock_screener.atomic_io import atomic_write, atomic_write_text
+from stock_screener.atomic_io import atomic_write, atomic_write_text, stage_and_promote_bundle
 from stock_screener.locking import run_locked
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,7 +127,6 @@ def load_or_fetch_profile(
         data = fetch_profile(base_url, symbol, api_key)
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise RuntimeError("empty or malformed FMP profile response; preserved existing raw cache")
-        raw_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_text(raw_path, json.dumps(data, indent=2, sort_keys=True) + "\n")
         if delay_seconds > 0:
             time.sleep(delay_seconds)
@@ -169,20 +168,39 @@ def build_profile_row(universe_row: dict[str, str], profile_payload: list[dict],
 
 def write_csv(path: Path, rows: Iterable[object]) -> int:
     rows = list(rows)
-    def write_temp(tmp_path: Path) -> None:
-        if not rows:
-            tmp_path.write_text("", encoding="utf-8")
-            return
-        fieldnames = list(asdict(rows[0]).keys()) if hasattr(rows[0], "__dataclass_fields__") else list(rows[0].keys())
-        with tmp_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(asdict(row) if hasattr(row, "__dataclass_fields__") else row)
-            f.flush()
-            os.fsync(f.fileno())
-    atomic_write(path, write_temp)
+    atomic_write(path, lambda tmp_path: write_csv_file(tmp_path, rows))
     return len(rows)
+
+
+def write_csv_file(path: Path, rows: Iterable[object]) -> None:
+    rows = list(rows)
+    if not rows:
+        path.write_text("", encoding="utf-8")
+        return
+    fieldnames = list(asdict(rows[0]).keys()) if hasattr(rows[0], "__dataclass_fields__") else list(rows[0].keys())
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(asdict(row) if hasattr(row, "__dataclass_fields__") else row)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def publish_processed_outputs(
+    profiles_path: Path,
+    sector_path: Path,
+    industry_path: Path,
+    metadata_path: Path,
+    rows: list[ProfileRow],
+    metadata: dict,
+) -> None:
+    stage_and_promote_bundle([
+        (profiles_path, lambda stage: write_csv_file(stage, rows)),
+        (sector_path, lambda stage: write_csv_file(stage, summary_rows(rows, "sector"))),
+        (industry_path, lambda stage: write_csv_file(stage, summary_rows(rows, "industry"))),
+        (metadata_path, lambda stage: stage.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")),
+    ])
 
 
 def summary_rows(rows: list[ProfileRow], field: str) -> list[dict[str, str | int]]:
@@ -282,13 +300,6 @@ def main() -> int:
         max_error_rate=max_error_rate,
         existing_output_paths=output_paths,
     )
-    if promote_outputs:
-        write_csv(processed_profiles_path, rows)
-        write_csv(sector_summary_path, summary_rows(rows, "sector"))
-        write_csv(industry_summary_path, summary_rows(rows, "industry"))
-    else:
-        print(f"Preserving existing processed FMP outputs: {promotion_reason}", flush=True)
-
     metadata = {
         "refreshed_at_utc": datetime.now(timezone.utc).isoformat(),
         "universe_path": config["universe_path"],
@@ -303,8 +314,13 @@ def main() -> int:
         "processed_outputs_promoted": promote_outputs,
         "processed_output_promotion_reason": promotion_reason,
     }
-    metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(metadata_path, json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+    if promote_outputs:
+        publish_processed_outputs(
+            processed_profiles_path, sector_summary_path, industry_summary_path,
+            metadata_path, rows, metadata,
+        )
+    else:
+        print(f"Preserving existing processed FMP outputs: {promotion_reason}", flush=True)
 
     print(json.dumps(metadata, indent=2, sort_keys=True))
     return 0 if error_count == 0 else 1

@@ -30,7 +30,7 @@ from stock_screener.price_history import (  # noqa: E402
     sleep_between_requests,
 )
 from stock_screener.owned_paths import resolve_owned_path  # noqa: E402
-from stock_screener.atomic_io import atomic_write, atomic_write_text  # noqa: E402
+from stock_screener.atomic_io import append_text, atomic_write, atomic_write_text  # noqa: E402
 from stock_screener.locking import run_locked  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "price_history.json"
@@ -56,9 +56,7 @@ def write_failures(path: Path, failures: list[FetchResult]) -> None:
 
 
 def append_progress(path: Path, event: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, sort_keys=True) + "\n")
+    append_text(path, json.dumps(event, sort_keys=True) + "\n")
 
 
 def main() -> int:
@@ -76,7 +74,6 @@ def main() -> int:
     metadata_path = resolve_owned_path(ROOT, config["metadata_path"], label="metadata_path")
     failures_path = resolve_owned_path(ROOT, config["failures_path"], label="failures_path")
     progress_path = resolve_owned_path(ROOT, config["progress_path"], label="progress_path")
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.symbol:
         symbols = sorted(dict.fromkeys(s.strip().upper() for s in args.symbol if s.strip()))
@@ -190,7 +187,6 @@ def main() -> int:
         "progress_path": config["progress_path"],
         "stopped_early_reason": stopped_early_reason,
     }
-    metadata_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(metadata_path, json.dumps(metadata, indent=2, sort_keys=True) + "\n")
     print(json.dumps(metadata, indent=2, sort_keys=True))
     return 1 if failed else 0

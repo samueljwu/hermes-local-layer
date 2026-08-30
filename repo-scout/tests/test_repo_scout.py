@@ -1,4 +1,5 @@
 import hashlib
+import os
 import tempfile
 import unittest
 import urllib.parse
@@ -17,9 +18,61 @@ from repo_scout.feedback import load_feedback_profile, parse_feedback_args, reco
 from repo_scout.github_api import GitHubClient, GitHubRateLimitError, RequestPacer, build_search_queries, search_repositories
 from repo_scout.interests import build_interest_profile
 from repo_scout.ranking import rank_repo
+from repo_scout.secure_fs import open_output_directory
 
 
 class RepoScoutTests(unittest.TestCase):
+    def test_absolute_output_ancestor_symlink_cannot_redirect_writes(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            external = base / "external"
+            external.mkdir()
+            ancestor = base / "ancestor"
+            ancestor.symlink_to(external, target_is_directory=True)
+            root = ancestor / "out"
+
+            with self.assertRaises(OSError):
+                with open_output_directory(root, root / "run") as (_, selected):
+                    selected.atomic_write_json("result.json", {"unsafe": True})
+
+            self.assertEqual(list(external.iterdir()), [])
+
+    def test_replacing_opened_output_ancestor_cannot_redirect_writes(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            ancestor = base / "ancestor"
+            root = ancestor / "out"
+            root.mkdir(parents=True)
+            external = base / "external"
+            external.mkdir()
+
+            with open_output_directory(root, root / "run") as (_, selected):
+                moved = base / "moved-ancestor"
+                ancestor.rename(moved)
+                ancestor.symlink_to(external, target_is_directory=True)
+                selected.atomic_write_json("result.json", {"safe": True})
+
+            self.assertTrue((moved / "out" / "run" / "result.json").exists())
+            self.assertEqual(list(external.iterdir()), [])
+
+    def test_unexpected_scout_exceptions_do_not_leak_cache_directory_fds(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            config_path = base / "config.yaml"
+            out = base / "out"
+            config_path.write_text("languages:\n  - Python\ninterest_roots: []\n", encoding="utf-8")
+
+            before = len(os.listdir("/proc/self/fd"))
+            with mock.patch.object(cli_mod, "DEFAULT_OUT_DIR", out), mock.patch.object(
+                cli_mod, "REPO_ROOT", base
+            ), mock.patch.object(cli_mod, "search_repositories", side_effect=RuntimeError("unexpected")):
+                for _ in range(20):
+                    with self.assertRaisesRegex(RuntimeError, "unexpected"):
+                        run_scout(config_path, out)
+            after = len(os.listdir("/proc/self/fd"))
+
+            self.assertEqual(after, before)
+
     def test_shared_locks_reject_symlinks_without_truncating_target(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -554,6 +607,33 @@ class RepoScoutTests(unittest.TestCase):
             finally:
                 cli.REPO_ROOT = original_repo_root
                 cli.DEFAULT_OUT_DIR = original_default_out
+
+    def test_symlinked_canonical_output_root_cannot_change_external_files(self):
+        from repo_scout import cli
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            external = tmp_path / "external"
+            external.mkdir()
+            protected = external / "protected.txt"
+            protected.write_text("preserve me\n", encoding="utf-8")
+            (tmp_path / "out").symlink_to(external, target_is_directory=True)
+            config_path = tmp_path / "config.yaml"
+            config_path.write_text("languages:\n  - Python\ninterest_roots: []\n", encoding="utf-8")
+
+            original_repo_root = cli.REPO_ROOT
+            original_default_out = cli.DEFAULT_OUT_DIR
+            try:
+                cli.REPO_ROOT = tmp_path
+                cli.DEFAULT_OUT_DIR = tmp_path / "out"
+                with self.assertRaises(OSError):
+                    run_scout(config_path, Path("out"), dry_run=True)
+            finally:
+                cli.REPO_ROOT = original_repo_root
+                cli.DEFAULT_OUT_DIR = original_default_out
+
+            self.assertEqual(protected.read_text(encoding="utf-8"), "preserve me\n")
+            self.assertEqual(sorted(path.name for path in external.iterdir()), ["protected.txt"])
 
     def test_load_config_from_yaml(self):
         with tempfile.TemporaryDirectory() as td:

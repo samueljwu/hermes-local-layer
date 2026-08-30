@@ -1,7 +1,9 @@
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
+from unittest import mock
 
 MODULE_PATH = Path(__file__).with_name('wiki_read_harness.py')
 spec = importlib.util.spec_from_file_location('wiki_read_harness', MODULE_PATH)
@@ -91,8 +93,32 @@ def test_noncanonical_wiki_env_requires_explicit_allow(tmp_path):
             os.environ[wiki_read_harness.ALLOW_NONCANONICAL_ROOTS_ENV] = old_allow
 
 
+def test_journal_session_lookup_uses_shared_wiki_common_guard(tmp_path):
+    hooks_root = Path('/home/hermes/.hermes/hooks')
+    if str(hooks_root) not in sys.path:
+        sys.path.insert(0, str(hooks_root))
+    handler_path = hooks_root / 'wiki-autobuild' / 'handler.py'
+    handler_spec = importlib.util.spec_from_file_location('journal_wiki_autobuild_probe', handler_path)
+    assert handler_spec and handler_spec.loader
+    handler = importlib.util.module_from_spec(handler_spec)
+    handler_spec.loader.exec_module(handler)
+    wiki_common = sys.modules['wiki_common']
+    marker = tmp_path / 'autobuild-ran'
+    script = tmp_path / 'would-run.py'
+    script.write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran', encoding='utf-8')\n",
+        encoding='utf-8',
+    )
+
+    with mock.patch.object(wiki_common, 'get_chat_id_from_session', return_value=wiki_common.get_channel_id('journal')):
+        with mock.patch.object(handler, 'SCRIPT', script):
+            with mock.patch.object(handler.subprocess, 'run') as run:
+                handler.handle('agent:end', {'platform': 'discord', 'session_id': 'journal-session'})
+
+    run.assert_not_called()
+    assert not marker.exists()
+
+
 if __name__ == '__main__':
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        test_semantic_plan_reads_prebuilt_artifacts_without_subprocess(Path(td))
-    print('wiki_read_harness tests passed')
+    import subprocess
+    raise SystemExit(subprocess.run(['uv', 'run', '--with', 'pytest', 'pytest', str(Path(__file__)), '-q']).returncode)

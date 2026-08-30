@@ -46,7 +46,6 @@ def main() -> int:
         "price_dir": config["output_dir"],
         "min_expected_rows": min_rows,
     })
-    output.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(output, json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 1 if summary["missing_count"] or summary["invalid_count"] else 0

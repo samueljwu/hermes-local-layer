@@ -40,7 +40,10 @@ Routine commands:
 /home/hermes/tasks/_tools/task_ops.py regenerate
 /home/hermes/tasks/_tools/task_ops.py add --help
 /home/hermes/tasks/_tools/task_ops.py close --help
+python3 /home/hermes/tasks/_tools/test_task_ops.py
 ```
+
+The mutation harness validates the full proposed registry and all canonical/log/index/generated parents before writing. Locks and atomic publication are descriptor-relative with `O_NOFOLLOW`; symlinked parents fail closed without changing task state or external targets. The direct test command delegates to pytest through `uv` and runs every regression in the file.
 
 Google Calendar authorization:
 - The authorization and synchronization helpers are private live-only files and are not included in the backup or filtered public mirror.

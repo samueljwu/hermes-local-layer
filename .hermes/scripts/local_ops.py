@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import secrets
 import time
 import contextlib
 import fcntl
@@ -23,6 +23,32 @@ DISCORD_API = "https://discord.com/api/v10"
 DEFAULT_ENV_PATH = Path.home() / ".hermes" / ".env"
 CHANNELS_PATH = Path.home() / ".hermes" / "local_channels.yaml"
 CANONICAL_TASKS_ROOT = Path("/home/hermes/tasks")
+
+
+def open_directory_nofollow(path: Path, *, create: bool = False) -> int:
+    """Open a directory one component at a time without following symlinks."""
+    directory = Path(path)
+    fd = os.open("/" if directory.is_absolute() else ".", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        parts = directory.parts[1:] if directory.is_absolute() else directory.parts
+        for component in parts:
+            if component in {"", "."}:
+                continue
+            if component == "..":
+                raise ValueError(f"refusing parent traversal in directory path: {directory}")
+            try:
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, 0o755, dir_fd=fd)
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def resolve_tasks_root() -> Path:
@@ -47,9 +73,12 @@ def resolve_tasks_root() -> Path:
 def tasks_lock(root: Path | None = None):
     """Take the task-system lock shared by task_ops and operational consumers."""
     lock_path = (root or resolve_tasks_root()) / "_meta" / ".task_ops.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(lock_path, flags, 0o600)
+    parent_fd = open_directory_nofollow(lock_path.parent, create=True)
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+    try:
+        fd = os.open(lock_path.name, flags, 0o600, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RuntimeError(f"refusing non-regular task lock: {lock_path}")
@@ -121,28 +150,27 @@ def channel_id(name: str, *, platform: str = "discord") -> str | None:
 
 
 def atomic_json_write(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    dir_fd = open_directory_nofollow(path.parent, create=True)
+    tmp_name = f".{path.name}.{secrets.token_hex(8)}.tmp"
+    fd = -1
     try:
+        fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = -1
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_name, path)
-        try:
-            dir_fd = os.open(path.parent, os.O_DIRECTORY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
+        os.replace(tmp_name, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        os.fsync(dir_fd)
     finally:
+        if fd >= 0:
+            os.close(fd)
         try:
-            os.unlink(tmp_name)
+            os.unlink(tmp_name, dir_fd=dir_fd)
         except FileNotFoundError:
             pass
+        os.close(dir_fd)
 
 
 def redacted_error(exc: BaseException) -> str:

@@ -15,7 +15,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Iterable
+from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -24,13 +24,11 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from stock_screener.atomic_io import atomic_write, atomic_write_text, promote_staged_bundle, unique_temp_path
+from stock_screener.atomic_io import atomic_write, stage_and_promote_bundle
 from stock_screener.locking import run_locked
 from stock_screener.owned_paths import resolve_owned_path
 
 CONFIG_PATH = ROOT / "config" / "universe_sources.json"
-RAW_DIR = ROOT / "data" / "universe" / "raw"
-PROCESSED_DIR = ROOT / "data" / "universe" / "processed"
 
 
 @dataclass(frozen=True)
@@ -78,9 +76,6 @@ def download_sources(config: dict) -> dict[str, Path]:
     sources = config["sources"]
     nasdaq_path = resolve_owned_path(ROOT, sources["nasdaq"]["raw_path"], label="sources.nasdaq.raw_path")
     nyse_path = resolve_owned_path(ROOT, sources["nyse"]["raw_path"], label="sources.nyse.raw_path")
-    nasdaq_stage = unique_temp_path(nasdaq_path, suffix=".download")
-    nyse_stage = unique_temp_path(nyse_path, suffix=".download")
-
     nyse_payload = {
         "instrumentType": "EQUITY",
         "pageNumber": 1,
@@ -89,32 +84,42 @@ def download_sources(config: dict) -> dict[str, Path]:
         "maxResultsPerPage": 10000,
         "filterToken": "",
     }
-    try:
-        nasdaq_stage.write_bytes(fetch_url(sources["nasdaq"]["url"]))
-        nyse_stage.write_bytes(fetch_url(
-            sources["nyse"]["url"],
-            data=json.dumps(nyse_payload).encode("utf-8"),
-            content_type="application/json",
-        ))
+    nasdaq_bytes = fetch_url(sources["nasdaq"]["url"])
+    nyse_bytes = fetch_url(
+        sources["nyse"]["url"],
+        data=json.dumps(nyse_payload).encode("utf-8"),
+        content_type="application/json",
+    )
+    nasdaq_stage: Path | None = None
+
+    def write_nasdaq(stage: Path) -> None:
+        nonlocal nasdaq_stage
+        stage.write_bytes(nasdaq_bytes)
+        nasdaq_stage = stage
+
+    def write_nyse_and_validate(stage: Path) -> None:
+        stage.write_bytes(nyse_bytes)
+        assert nasdaq_stage is not None
         # Validate the exact bytes staged for promotion. Empty, malformed, and
         # sparse responses never replace either prior raw provider cache.
         nasdaq_rows = normalize_nasdaq(nasdaq_stage, sources["nasdaq"]["url"])
         try:
-            nyse_payload_rows = json.loads(nyse_stage.read_text(encoding="utf-8", errors="replace"))
+            nyse_payload_rows = json.loads(stage.read_text(encoding="utf-8", errors="replace"))
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"malformed NYSE raw response: {exc}") from exc
         if not isinstance(nyse_payload_rows, list):
             raise RuntimeError("malformed NYSE raw response: expected a list")
-        nyse_rows = normalize_nyse(nyse_stage, sources["nyse"]["url"])
+        nyse_rows = normalize_nyse(stage, sources["nyse"]["url"])
         validate_refresh_counts(config, {
             "nasdaq_raw": len(nasdaq_rows),
             "nyse_raw_xnys": len(nyse_rows),
             "combined_active": len(nasdaq_rows) + len(nyse_rows),
         })
-        promote_staged_bundle([(nasdaq_stage, nasdaq_path), (nyse_stage, nyse_path)])
-    finally:
-        nasdaq_stage.unlink(missing_ok=True)
-        nyse_stage.unlink(missing_ok=True)
+
+    stage_and_promote_bundle([
+        (nasdaq_path, write_nasdaq),
+        (nyse_path, write_nyse_and_validate),
+    ])
 
     return {"nasdaq": nasdaq_path, "nyse": nyse_path}
 
@@ -237,20 +242,49 @@ def split_active_excluded(rows: Iterable[UniverseRow], config: dict) -> tuple[li
 
 def write_csv(path: Path, rows: Iterable[object]) -> int:
     rows = list(rows)
-    def writer(tmp: Path) -> None:
-        if not rows:
-            tmp.write_text("", encoding="utf-8")
-            return
-        fieldnames = list(asdict(rows[0]).keys())
-        with tmp.open("w", newline="", encoding="utf-8") as f:
-            csv_writer = csv.DictWriter(f, fieldnames=fieldnames)
-            csv_writer.writeheader()
-            for row in rows:
-                csv_writer.writerow(asdict(row))
-            f.flush()
-            os.fsync(f.fileno())
-    atomic_write(path, writer)
+    atomic_write(path, lambda tmp: write_csv_file(tmp, rows))
     return len(rows)
+
+
+def write_csv_file(path: Path, rows: Iterable[object]) -> None:
+    rows = list(rows)
+    if not rows:
+        path.write_text("", encoding="utf-8")
+        return
+    fieldnames = list(asdict(rows[0]).keys())
+    with path.open("w", newline="", encoding="utf-8") as f:
+        csv_writer = csv.DictWriter(f, fieldnames=fieldnames)
+        csv_writer.writeheader()
+        for row in rows:
+            csv_writer.writerow(asdict(row))
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def publish_processed_outputs(
+    processed_dir: Path,
+    active_nasdaq: list[UniverseRow],
+    active_nyse: list[UniverseRow],
+    active: list[UniverseRow],
+    excluded: list[ExcludedRow],
+    metadata: dict,
+) -> None:
+    """Publish the coupled universe generation with rollback-safe promotion."""
+    payloads = {
+        "nasdaq_universe.csv": active_nasdaq,
+        "nyse_universe.csv": active_nyse,
+        "active_universe.csv": active,
+        "excluded_universe.csv": excluded,
+    }
+    writes: list[tuple[Path, Callable[[Path], object]]] = [
+        (processed_dir / name, lambda stage, rows=rows: write_csv_file(stage, rows))
+        for name, rows in payloads.items()
+    ]
+    writes.append((
+        processed_dir / "universe_metadata.json",
+        lambda stage: stage.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"),
+    ))
+    stage_and_promote_bundle(writes)
 
 
 def min_count(config: dict, key: str, default: int) -> int:
@@ -270,6 +304,10 @@ def validate_refresh_counts(config: dict, counts: dict[str, int]) -> None:
 
 def main() -> int:
     config = load_config()
+    # Validate the complete processed-output boundary before network/provider
+    # work so a symlinked parent cannot receive (or delay rejection until after)
+    # any refresh-side effects.
+    processed_dir = resolve_owned_path(ROOT, "data/universe/processed", label="processed_dir")
     paths = download_sources(config)
 
     payload = json.loads(paths["nyse"].read_text(encoding="utf-8", errors="replace"))
@@ -281,7 +319,6 @@ def main() -> int:
     active_nasdaq = [row for row in active if row.exchange == "NASDAQ"]
     active_nyse = [row for row in active if row.exchange == "NYSE"]
 
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     counts = {
         "nasdaq_raw": len(nasdaq_rows),
         "nyse_raw_all_markets": len(payload),
@@ -292,23 +329,13 @@ def main() -> int:
         "excluded": len(excluded),
     }
     validate_refresh_counts(config, counts)
-    counts.update({
-        "nasdaq_active": write_csv(PROCESSED_DIR / "nasdaq_universe.csv", active_nasdaq),
-        "nyse_active": write_csv(PROCESSED_DIR / "nyse_universe.csv", active_nyse),
-        "combined_active": write_csv(PROCESSED_DIR / "active_universe.csv", active),
-        "excluded": write_csv(PROCESSED_DIR / "excluded_universe.csv", excluded),
-    })
-
     metadata = {
         "refreshed_at_utc": datetime.now(timezone.utc).isoformat(),
         "sources": config["sources"],
         "filters": config["filters"],
         "counts": counts,
     }
-    metadata_path = PROCESSED_DIR / "universe_metadata.json"
-    atomic_write_text(metadata_path,
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-    )
+    publish_processed_outputs(processed_dir, active_nasdaq, active_nyse, active, excluded, metadata)
 
     print(json.dumps(counts, indent=2, sort_keys=True))
     return 0

@@ -11,7 +11,7 @@ Allowed writes:
 - `/home/hermes/repo-scout/out/**`
 - project source/docs under `/home/hermes/repo-scout/**` when intentionally developing the tool
 
-Normal CLI output is constrained by code: both `--out` and `--feedback` must resolve under `/home/hermes/repo-scout/out/`. Feedback may intentionally use the shared canonical `out/feedback.jsonl` while a selected run output lives in a subdirectory such as `out/slash/`.
+Normal CLI output is constrained by code: both `--out` and `--feedback` must be lexically under `/home/hermes/repo-scout/out/`. The full absolute hierarchy is traversed component-by-component with `O_DIRECTORY` and `O_NOFOLLOW`, including ancestors above canonical `out/`; canonical `out/` and selected descendants are created relative to already-open parent descriptors. The output boundary and every selected directory component must be real, current-user-owned directories rather than symlinks. Locks, atomic JSON/cache writes, and feedback appends are performed relative to verified directory descriptors, so replacing an opened ancestor cannot redirect writes. Feedback may intentionally use the shared canonical `out/feedback.jsonl` while a selected run output lives in a subdirectory such as `out/slash/`.
 
 Disallowed writes, not overrideable:
 

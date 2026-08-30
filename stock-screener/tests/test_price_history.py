@@ -9,7 +9,9 @@ from stock_screener.price_history import (
     is_cache_fresh,
     normalize_yahoo_chart,
     write_price_csv,
+    fetch_symbol_with_retries,
 )
+from unittest import mock
 
 
 class PriceHistoryTests(unittest.TestCase):
@@ -80,6 +82,45 @@ class PriceHistoryTests(unittest.TestCase):
             now = datetime.now(timezone.utc)
             self.assertTrue(is_cache_fresh(path, freshness_days=5, min_rows=5, now=now))
             self.assertFalse(is_cache_fresh(path, freshness_days=5, min_rows=6, now=now))
+
+    def test_shorter_valid_yahoo_response_never_replaces_more_complete_valid_cache(self):
+        def rows(count):
+            return [
+                {"date": f"2024-01-{index:02d}", "open": 10, "high": 12, "low": 9,
+                 "close": 11, "adj_close": 11, "volume": 100}
+                for index in range(1, count + 1)
+            ]
+
+        with tempfile.TemporaryDirectory() as td:
+            output_dir = Path(td)
+            path = output_dir / "AAPL.csv"
+            write_price_csv(path, rows(3))
+            old_bytes = path.read_bytes()
+            with mock.patch("stock_screener.price_history.fetch_yahoo_payload", return_value={}), \
+                 mock.patch("stock_screener.price_history.normalize_yahoo_chart", return_value=rows(2)):
+                result = fetch_symbol_with_retries(
+                    "AAPL", output_dir, 5, "1wk", 1, 1, [0], min_expected_rows=1,
+                )
+            self.assertEqual(result.status, "fetched_short_preserved_cache")
+            self.assertEqual(result.rows, 3)
+            self.assertEqual(path.read_bytes(), old_bytes)
+
+    def test_shorter_response_can_replace_cache_that_does_not_match_schema(self):
+        rows = [
+            {"date": "2024-01-01", "open": 10, "high": 12, "low": 9,
+             "close": 11, "adj_close": 11, "volume": 100},
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            output_dir = Path(td)
+            path = output_dir / "AAPL.csv"
+            path.write_text("wrong,header\n" + "x,y\n" * 10, encoding="utf-8")
+            with mock.patch("stock_screener.price_history.fetch_yahoo_payload", return_value={}), \
+                 mock.patch("stock_screener.price_history.normalize_yahoo_chart", return_value=rows):
+                result = fetch_symbol_with_retries(
+                    "AAPL", output_dir, 5, "1wk", 1, 1, [0], min_expected_rows=1,
+                )
+            self.assertEqual(result.status, "fetched")
+            self.assertIn("date,open,high,low,close,adj_close,volume", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

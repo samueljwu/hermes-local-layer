@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import fcntl
 import json
-import os
-import stat
 import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .secure_fs import open_output_directory, require_lexically_under
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SCORE_RE = re.compile(r"^[+-]?[0-3]$")
@@ -19,22 +18,9 @@ LOCK_PATH = DEFAULT_OUT_DIR / ".repo-scout.lock"
 
 @contextmanager
 def repo_scout_lock():
-    DEFAULT_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(LOCK_PATH, flags, 0o600)
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise RuntimeError(f"refusing non-regular Repo Scout lock: {LOCK_PATH}")
-        f = os.fdopen(fd, "r+", encoding="utf-8")
-    except BaseException:
-        os.close(fd)
-        raise
-    with f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
+    with open_output_directory(DEFAULT_OUT_DIR, DEFAULT_OUT_DIR) as (root_dir, _):
+        with root_dir.lock(LOCK_PATH.name):
             yield
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _now_iso() -> str:
@@ -77,11 +63,7 @@ def parse_feedback_args(raw_args: str) -> dict[str, Any]:
 
 
 def _confine_feedback_path(feedback_path: str | Path) -> Path:
-    path = Path(feedback_path).expanduser().resolve()
-    out_root = DEFAULT_OUT_DIR.resolve()
-    if path != out_root and out_root not in path.parents:
-        raise ValueError(f"feedback path must stay under {out_root}: {path}")
-    return path
+    return require_lexically_under(Path(feedback_path), DEFAULT_OUT_DIR, "feedback path")
 
 
 def record_feedback(
@@ -107,12 +89,9 @@ def record_feedback(
         "language": str(language or "").strip() or None,
     }
     path = _confine_feedback_path(feedback_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     with repo_scout_lock():
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(item, sort_keys=True) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        with open_output_directory(DEFAULT_OUT_DIR, path.parent) as (_, parent_dir):
+            parent_dir.append_json_line(path.name, item)
     return item
 
 
