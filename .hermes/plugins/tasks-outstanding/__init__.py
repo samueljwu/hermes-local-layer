@@ -14,9 +14,10 @@ from zoneinfo import ZoneInfo
 import re
 import sys
 
-LOCAL_SCRIPTS = Path("/home/hermes/.hermes/scripts")
+LOCAL_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 if str(LOCAL_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(LOCAL_SCRIPTS))
+from task_schema import is_open, OPEN_STATUSES, VALID_STATUSES
 from local_ops import resolve_tasks_root  # noqa: E402
 
 REGISTRY_PATH = resolve_tasks_root() / "_meta" / "task_registry.json"
@@ -71,7 +72,7 @@ def _read_registry() -> list[dict]:
 
 def _sort_key(task: dict) -> tuple[datetime, int, str]:
     due = _parse_due(task.get("due_date"))
-    return (due or datetime.max.replace(tzinfo=LOCAL_TZ), _creation_order(task), str(task.get("task", "")))
+    return (due or datetime.max.replace(tzinfo=LOCAL_TZ), _creation_order(task), str(task.get("name", "")))
 
 
 def _handle_outstanding(raw_args: str = "") -> str:
@@ -79,7 +80,7 @@ def _handle_outstanding(raw_args: str = "") -> str:
     # handler signature tolerant because gateway text dispatch may still pass a
     # raw_args string, but ignore it so native Discord registration can stay
     # argument-free.
-    tasks = [t for t in _read_registry() if t.get("status", "pending") == "pending"]
+    tasks = [t for t in _read_registry() if is_open(t)]
 
     if not tasks:
         return "No outstanding tasks found."
@@ -88,7 +89,7 @@ def _handle_outstanding(raw_args: str = "") -> str:
     for t in sorted(tasks, key=_sort_key):
         due = _format_due(t.get("due_date"))
         tag = str(t.get("tag") or "Other").strip()
-        desc = str(t.get("task", "")).strip().rstrip(".")
+        desc = str(t.get("name", "")).strip().rstrip(".")
         priority = str(t.get("priority", "medium")).lower()
         high = " - High" if priority in {"high", "top", "urgent"} else ""
         lines.append(f"{t.get('id', '?')} - {due} - {tag} - {desc}{high}")

@@ -184,7 +184,7 @@ class SyncTests(unittest.TestCase):
             live = self.plugin.LiveTags(self.ctx)
             live.refresh_native(native, adapter, live.refresh_handlers())
             self.assertIsNone(native.tree.get_command("new_project"))
-            self.registry.write_text(json.dumps([{"id": "T-1-1", "tag": "New Project", "task": "fixture task"}]))
+            self.registry.write_text(json.dumps([{"id": "T-1-1", "tag": "New Project", "status": "not_started", "name": "fixture task"}]))
             mapping = live.refresh_handlers()
             live.refresh_native(native, adapter, mapping)
             command = native.tree.get_command("new_project")
@@ -211,7 +211,7 @@ class SyncTests(unittest.TestCase):
                 nonlocal ticks
                 ticks += 1
                 if ticks == 1:
-                    self.registry.write_text(json.dumps([{"tag": "New Project", "task": "added after boot"}]))
+                    self.registry.write_text(json.dumps([{"tag": "New Project", "status": "not_started", "name": "added after boot"}]))
                 elif ticks == 2:
                     self.rest.commands.clear()  # remote deletion / core sync drift
                     live.last_remote = float("-inf")
@@ -252,7 +252,7 @@ class SyncTests(unittest.TestCase):
 
     def test_watcher_lifecycle_receipt_and_long_rate_cooldown(self):
         async def scenario():
-            self.registry.write_text(json.dumps([{"tag": "School", "task": "fixture"}]))
+            self.registry.write_text(json.dumps([{"tag": "School", "status": "not_started", "name": "fixture"}]))
             import discord
             from discord.ext import commands
             native = commands.Bot(command_prefix="!", intents=discord.Intents.none())

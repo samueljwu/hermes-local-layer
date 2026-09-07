@@ -49,6 +49,7 @@ DURABLE_STATIC_ALLOWED_SUFFIXES = {
 BLOCKED_PATH_RE = re.compile(
     r"(^|/)("
     r"projects/|"
+    r"notion-integration-review/|"
     r"pdf_audit_extract\.json$|"
     r"\.env(?:\..*)?$|"
     r"\.git-credentials$|"

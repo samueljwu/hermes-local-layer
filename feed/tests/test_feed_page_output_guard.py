@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 
-RENDERER = Path('/home/hermes/feed/_tools/render_feed_page.py')
+RENDERER = Path(__file__).resolve().parents[1] / '_tools/render_feed_page.py'
 
 
 def load_renderer():
@@ -21,7 +21,7 @@ def test_render_rejects_noncanonical_output_path(tmp_path):
     output = tmp_path / 'index.html'
 
     try:
-        renderer.render_to_file(output_path=output, locked=True)
+        renderer.render_to_file(history_path=tmp_path / 'absent-fixture-history.json', output_path=output, locked=True)
     except RuntimeError as exc:
         assert 'outside canonical output' in str(exc)
     else:  # pragma: no cover

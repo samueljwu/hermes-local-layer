@@ -121,13 +121,24 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
                         pass
             self.assertFalse((outside / "locks" / "report.lock").exists())
 
+    def test_occurrence_log_survives_current_name_status_and_rank_changes(self):
+        registry = [{"id": "T-9-1", "name": "Current recurring name", "status": "not_started",
+                     "tag": "Recurring", "notes": "Canonical recurring notes"}]
+        records = report.build_completion_records(
+            "## 2026-01-03\n- **T-1-1** — Historical recurring title — completed occurrence\n",
+            registry, date(2026, 1, 1), date(2026, 1, 4))
+        self.assertEqual(records, [{"id": "T-1-1", "task": "Historical recurring title",
+                                   "status": "completed occurrence", "date": date(2026, 1, 3),
+                                   "tag": "Recurring", "notes": "Canonical recurring notes"}])
+
     def test_completion_date_not_due_date_drives_report_day_and_week(self) -> None:
         registry = [{
             "id": "T-1-1",
-            "task": "Example task",
+            "name": "Renamed current task",
+            "status": "in_progress",
             "due_date": "2026-01-01",
             "tag": "Other",
-            "notes": "",
+            "notes": "Canonical notes",
         }]
         log_text = """# Task Log
 
@@ -144,6 +155,11 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
         )
 
         self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["task"], "Example task")
+        self.assertEqual(records[0]["status"], "completed")
+        self.assertEqual(records[0]["tag"], "Other")
+        self.assertEqual(records[0]["notes"], "Canonical notes")
+        self.assertNotIn("name", records[0])
         self.assertEqual(records[0]["date"], date(2026, 1, 3))
         self.assertEqual(report.completion_week_start(records[0]["date"]), date(2025, 12, 29))
         self.assertNotEqual(records[0]["date"], date.fromisoformat(registry[0]["due_date"]))
