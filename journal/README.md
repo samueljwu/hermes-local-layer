@@ -50,7 +50,7 @@ Non-negotiable rules:
 - Do not turn action-like wording into implementation from the journal workflow.
 - Never mutate `/home/hermes/wiki` from journal context.
 - Update `index.md` and append `log.md` for journal changes.
-- Use `journal_ops.py` for mutations: it validates the complete proposed registry and all output parents before any registry/log/index/derived write, and uses descriptor-relative `O_NOFOLLOW` locks and atomic publication.
+- Use `journal_ops.py` for mutations: it validates the complete proposed registry and all output parents before any registry/log/index/derived write, uses descriptor-relative `O_NOFOLLOW` locks and atomic publication, and restores the exact prior registry/log/index/entry bundle if a later publication step fails.
 
 More detail:
 - Full rules: `SCHEMA.md`

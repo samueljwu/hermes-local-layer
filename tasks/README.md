@@ -43,7 +43,7 @@ Routine commands:
 python3 /home/hermes/tasks/_tools/test_task_ops.py
 ```
 
-The mutation harness validates the full proposed registry and all canonical/log/index/generated parents before writing. Locks and atomic publication are descriptor-relative with `O_NOFOLLOW`; symlinked parents fail closed without changing task state or external targets. The direct test command delegates to pytest through `uv` and runs every regression in the file.
+The mutation harness validates the full proposed registry and all canonical/log/index/generated parents before writing. Locks and atomic publication are descriptor-relative with `O_NOFOLLOW`; symlinked parents fail closed without changing task state or external targets. Registry, log, index, and derived-note changes are a rollback-capable transaction: if a later publication step fails, the exact prior file bundle is restored before the error returns. The direct test command delegates to pytest through `uv` and runs every regression in the file.
 
 Google Calendar authorization:
 - The authorization and synchronization helpers are private live-only files and are not included in the backup or filtered public mirror.
@@ -66,6 +66,7 @@ Google Calendar authorization:
 - Canonical `add`, `amend`, `close`, and `regenerate` operations run a bounded unattended sync after releasing the task lock (`10` actions maximum, `3` deletions maximum). Failures warn without rolling back the canonical registry; the recovery job retries later.
 - A silent no-agent recovery reconciliation runs every 15 minutes. It emits a fixed alert to `#tasks` on synchronization failure while returning success to the scheduler, preventing the globally configured agent-based cron autofix path from running; successful runs produce no message.
 - OAuth is restricted to the exact `calendar.app.created` scope, which excludes the primary and pre-existing unrelated calendars but can cover calendars created by this OAuth app. The runtime boundary is stricter: each run loads, verifies, and pins the configured `Hermes Tasks` calendar ID for planning, writes, and read-back.
+- Production Calendar helpers pin both the task root and `~/.config/hermes-tasks-calendar` through canonical-root resolvers before any credential/config read or write. Environment root overrides are accepted only when `HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS=1` is explicitly set for tests or development fixtures.
 
 Weekly completion reporting:
 - Generator: `/home/hermes/.hermes/scripts/weekly_task_completion_report.py`, launched by `/home/hermes/.hermes/scripts/weekly_task_completion_report.sh` in its dedicated virtual environment.
@@ -76,10 +77,11 @@ Weekly completion reporting:
 
 Discord automation:
 - Dashboard updater script: `/home/hermes/.hermes/scripts/update_tasks_dashboard.py` (called automatically by task harness mutations after their mutation lock is released; also runnable on demand). Refreshes share `_meta/.task_ops.lock`; dashboard state is promoted with unique fsynced temporary files and `os.replace`. It honors Discord `429` retry delays; if an old dashboard remains uneditable, it posts and pins a replacement, unpins the stale dashboard, and records the active message ID in `_meta/tasks_dashboard_state.json`.
-- Tag command sync: `/home/hermes/.hermes/scripts/discord_tag_commands.py`
+- Tag commands: the `tasks-tags` gateway plugin watches the canonical registry and reconciles both live command handlers and native Discord registration, including tags created through the CLI. Per-tag gateway restarts are not required. `/home/hermes/.hermes/scripts/discord_tag_commands.py` remains the manual diagnostic/repair entry point; native REST presence and a live handler must both be verified. Registration failures do not roll back tasks and are retried by the plugin.
 - Due-tomorrow reminder cron: `9d28b37d3bc6` at 22:00 HKT
 - Due-today reminder crons: `203eaf5378d2` at 06:00 HKT and `4a01545f43fd` at 18:00 HKT
 - Reminders should deliver to the main Discord `#tasks` channel, not threads.
+- `task_ops.py close` and `validate --with-cron` parse the multiline `hermes cron list --all` format and recognize per-task reminder references by both the current visible ID and the stable creation-order suffix, so task renumbering does not hide stale reminders.
 
 Non-negotiable rules:
 - Never edit derived task note files directly.

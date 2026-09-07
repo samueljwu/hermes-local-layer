@@ -42,6 +42,13 @@ projects/**
 # projection is task-completion-report/ and its durable source lives in tasks/.
 task-completion-analysis/
 task-completion-analysis/**
+# Ephemeral PDF-audit scratch exports. Canonical reviewed source/render assets
+# belong under the owning subsystem (currently wiki/src/raw/assets/), not here.
+pdf_audit_contact_sheets/
+pdf_audit_contact_sheets/**
+pdf_audit_text/
+pdf_audit_text/**
+pdf_audit_extract.json
 stock-screener/.env
 stock-screener/.env.*
 stock-screener/**/*secret*
@@ -138,6 +145,12 @@ tasks/_tools/google_calendar_sync.py
 tasks/_tools/test_google_calendar_auth.py
 tasks/_tools/test_google_calendar_sync.py
 .hermes/scripts/sync_hermes_tasks_calendar.py
+
+# Final exact deny: wiki/.tmp is generated ingestion/audit scratch. Keep this
+# below broad !wiki/** so durable reviewed assets must live under wiki/src/.
+/wiki/.tmp/
+/wiki/.tmp/**
+/pdf_audit_extract.json
 
 # Do not vendor Hermes source install into this backup repo
 .hermes/hermes-agent/

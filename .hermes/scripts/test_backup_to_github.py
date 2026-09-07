@@ -11,6 +11,52 @@ SCRIPT = Path(__file__).with_name("backup_to_github.sh")
 
 
 class BackupToGithubTests(unittest.TestCase):
+    def test_failed_staged_guard_restores_seeded_index_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "seeded.txt").write_text("base\n", encoding="utf-8")
+            (repo / "unstaged.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)
+            (repo / "seeded.txt").write_text("staged change\n", encoding="utf-8")
+            subprocess.run(["git", "add", "seeded.txt"], cwd=repo, check=True)
+            (repo / "unstaged.txt").write_text("must not remain staged\n", encoding="utf-8")
+
+            index = Path(subprocess.check_output(["git", "rev-parse", "--git-path", "index"], cwd=repo, text=True).strip())
+            if not index.is_absolute():
+                index = repo / index
+            before = index.read_bytes()
+            before_names = subprocess.check_output(
+                ["git", "diff", "--cached", "--name-only"], cwd=repo, text=True
+            )
+
+            harness = root / "harness"
+            harness.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            harness.chmod(0o755)
+            guard = root / "guard"
+            guard.write_text("#!/bin/sh\nexit 23\n", encoding="utf-8")
+            guard.chmod(0o755)
+            env = os.environ.copy()
+            env.update({
+                "HERMES_BACKUP_REPO": str(repo),
+                "HERMES_BACKUP_HARNESS": str(harness),
+                "HERMES_BACKUP_DOC_GUARD": str(guard),
+                "HERMES_BACKUP_LOCK": str(root / "backup.lock"),
+            })
+
+            proc = subprocess.run([str(SCRIPT)], env=env, text=True, capture_output=True, check=False)
+
+            self.assertEqual(proc.returncode, 23, proc.stderr)
+            self.assertEqual(index.read_bytes(), before)
+            self.assertEqual(
+                subprocess.check_output(["git", "diff", "--cached", "--name-only"], cwd=repo, text=True),
+                before_names,
+            )
+
     def test_bogus_inherited_lock_fd_cannot_reach_harness(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

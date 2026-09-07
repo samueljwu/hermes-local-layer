@@ -79,6 +79,37 @@ fi
 # Check already-tracked content and remote config before touching the index.
 "$HARNESS" --tracked --quiet
 
+# The backup stages into the shared repository index. Preserve its exact prior
+# bytes until every pre-commit guard and the commit itself succeeds, so a failed
+# guard cannot destroy unrelated work that an operator had already staged.
+GIT_DIR=$(git rev-parse --absolute-git-dir)
+INDEX_PATH=$(git rev-parse --git-path index)
+if [[ "$INDEX_PATH" != /* ]]; then
+  INDEX_PATH="$REPO/$INDEX_PATH"
+fi
+INDEX_BACKUP=$(mktemp "$GIT_DIR/index.backup.XXXXXX")
+INDEX_EXISTED=0
+INDEX_ACCEPTED=0
+if [[ -e "$INDEX_PATH" ]]; then
+  cp -- "$INDEX_PATH" "$INDEX_BACKUP"
+  INDEX_EXISTED=1
+fi
+restore_or_discard_index_snapshot() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [[ "$INDEX_ACCEPTED" -eq 0 ]]; then
+    if [[ "$INDEX_EXISTED" -eq 1 ]]; then
+      mv -f -- "$INDEX_BACKUP" "$INDEX_PATH"
+    else
+      rm -f -- "$INDEX_PATH" "$INDEX_BACKUP"
+    fi
+  else
+    rm -f -- "$INDEX_BACKUP"
+  fi
+  exit "$status"
+}
+trap restore_or_discard_index_snapshot EXIT HUP INT TERM
+
 git add .
 
 # Require docs to move with non-trivial harness/system changes.
@@ -95,10 +126,14 @@ else
     prefix="Scheduled backup"
   fi
   git commit -m "$prefix $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  INDEX_ACCEPTED=1
 fi
 
 # Re-run even when there was nothing new to commit: HEAD may still be ahead
 # because an earlier push failed after a successful commit.
 "$HARNESS" --tracked --quiet
 
+# At this point either the commit succeeded or the fully staged no-change index
+# passed every guard. A later push failure must not roll a committed index back.
+INDEX_ACCEPTED=1
 git push

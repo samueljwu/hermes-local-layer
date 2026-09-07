@@ -207,6 +207,13 @@ with locking.stock_screener_lock():
                 self.assertIn("run_locked(main)", text)
         self.assertIn("stock_screener.locking", (SCRIPTS / "weekly_update.sh").read_text(encoding="utf-8"))
 
+    def test_cron_wrapper_captures_before_descriptor_bound_log_publication(self):
+        text = Path("/home/hermes/.hermes/scripts/stock_screener_weekly_update.sh").read_text(encoding="utf-8")
+        self.assertLess(text.index("python3 -m stock_screener.locking"), text.index("atomic_write_bytes"))
+        self.assertIn('>"$TMP_LOG" 2>&1', text)
+        self.assertNotIn('>"$LOG_PATH" 2>&1', text)
+        self.assertIn("%N", text)
+
 
 if __name__ == "__main__":
     unittest.main()

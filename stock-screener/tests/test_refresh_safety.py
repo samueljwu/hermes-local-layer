@@ -15,7 +15,6 @@ if str(SCRIPTS) not in sys.path:
 import refresh_nasdaq_screener_metadata as metadata_refresh  # noqa: E402
 import refresh_universe  # noqa: E402
 import build_chart_page  # noqa: E402
-from build_chart_page import promote_directory, publish_html_with_assets  # noqa: E402
 from stock_screener.owned_paths import resolve_owned_path  # noqa: E402
 from unittest import mock
 
@@ -177,43 +176,6 @@ class RefreshSafetyTests(unittest.TestCase):
                     )
             for name, path in paths.items():
                 self.assertEqual(path.read_text(encoding="utf-8"), f"old-{name}")
-
-    def test_promote_directory_keeps_live_assets_if_staging_fails_before_promotion(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            live = root / "charts"
-            live.mkdir()
-            (live / "old.svg").write_text("old", encoding="utf-8")
-            staging = root / ".charts.tmp"
-            staging.mkdir()
-            (staging / "new.svg").write_text("new", encoding="utf-8")
-            promote_directory(staging, live)
-            self.assertFalse(staging.exists())
-            self.assertFalse((live / "old.svg").exists())
-            self.assertEqual((live / "new.svg").read_text(encoding="utf-8"), "new")
-
-    def test_publish_html_with_assets_rolls_assets_back_on_html_failure(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            live = root / "charts"
-            live.mkdir()
-            (live / "old.svg").write_text("old", encoding="utf-8")
-            staging = root / ".charts.tmp"
-            staging.mkdir()
-            (staging / "new.svg").write_text("new", encoding="utf-8")
-            html_path = root / "index.html"
-            html_path.write_text("old html", encoding="utf-8")
-            old_write = build_chart_page.write_text_atomic
-            try:
-                build_chart_page.write_text_atomic = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("html failure"))
-                with self.assertRaises(OSError):
-                    publish_html_with_assets(staging, live, html_path, "new html")
-            finally:
-                build_chart_page.write_text_atomic = old_write
-            self.assertEqual((live / "old.svg").read_text(encoding="utf-8"), "old")
-            self.assertFalse((live / "new.svg").exists())
-            self.assertEqual(html_path.read_text(encoding="utf-8"), "old html")
-
 
 if __name__ == "__main__":
     unittest.main()

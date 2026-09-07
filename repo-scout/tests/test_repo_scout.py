@@ -192,10 +192,10 @@ class RepoScoutTests(unittest.TestCase):
                     language="Java",
                     created_at="2026-05-10T00:00:01+00:00",
                 )
+                feedback = load_feedback_profile(feedback_path)
             finally:
                 feedback_mod.DEFAULT_OUT_DIR = old_default_out
                 feedback_mod.LOCK_PATH = old_lock_path
-            feedback = load_feedback_profile(feedback_path)
             good = rank_repo(
                 {"full_name": "owner/good", "topics": ["llm"], "language": "Python", "stargazers_count": 10, "open_issues_count": 3},
                 {"terms": {}},
@@ -264,13 +264,34 @@ class RepoScoutTests(unittest.TestCase):
                 path = feedback_mod.DEFAULT_OUT_DIR / "feedback.jsonl"
                 try:
                     record_feedback(path, full_name="owner/repo", score=1, created_at="2026-06-27T00:00:00+00:00")
+                    self.assertEqual(load_feedback_profile(path)["count"], 1)
                 finally:
                     feedback_mod.DEFAULT_OUT_DIR = old_default_out
                     feedback_mod.LOCK_PATH = old_lock_path
                 self.assertEqual(calls, ["enter", "exit"])
-                self.assertEqual(load_feedback_profile(path)["count"], 1)
         finally:
             feedback_mod.repo_scout_lock = old_lock
+
+    def test_feedback_read_rejects_symlinked_file(self):
+        from repo_scout import feedback as feedback_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            old_default_out = feedback_mod.DEFAULT_OUT_DIR
+            old_lock_path = feedback_mod.LOCK_PATH
+            feedback_mod.DEFAULT_OUT_DIR = base / "out"
+            feedback_mod.LOCK_PATH = feedback_mod.DEFAULT_OUT_DIR / ".repo-scout.lock"
+            feedback_mod.DEFAULT_OUT_DIR.mkdir()
+            outside = base / "outside.jsonl"
+            outside.write_text('{"full_name":"owner/external","score":3}\n', encoding="utf-8")
+            path = feedback_mod.DEFAULT_OUT_DIR / "feedback.jsonl"
+            path.symlink_to(outside)
+            try:
+                with self.assertRaises(OSError):
+                    load_feedback_profile(path)
+            finally:
+                feedback_mod.DEFAULT_OUT_DIR = old_default_out
+                feedback_mod.LOCK_PATH = old_lock_path
 
     def test_interest_profile_reads_only_configured_roots(self):
         with tempfile.TemporaryDirectory() as td:

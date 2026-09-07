@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for weekly task-completion date bucketing."""
 from datetime import date
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,15 @@ import weekly_task_completion_report as report
 
 
 class WeeklyTaskCompletionReportTests(unittest.TestCase):
+    @staticmethod
+    def payloads() -> dict[str, str | bytes]:
+        return {
+            "latest_report.json": "{}\n",
+            "latest_report_tasks.csv": "task_id\n",
+            "weekly_completed_tasks_last_10_weeks.svg": "<svg/>\n",
+            "weekly_completed_tasks_last_10_weeks.png": b"PNG",
+        }
+
     def test_failed_generation_switch_preserves_complete_previous_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -35,6 +45,29 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
                 self.assertTrue((out / name).is_symlink())
                 self.assertEqual((out / name).read_bytes(), f"old:{name}".encode())
 
+    def test_publish_repairs_partial_fixed_link_layout_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "task-completion-report"
+            out.mkdir()
+            lock = root / "report.lock"
+            for name in report.OUTPUT_NAMES:
+                (out / name).write_bytes(f"old:{name}".encode())
+
+            with mock.patch.object(report, "OUT", out), mock.patch.object(report, "LOCK", lock), mock.patch.object(
+                report, "ensure_output_root", side_effect=lambda: None
+            ):
+                report.publish_report_files(self.payloads())
+                broken = out / report.OUTPUT_NAMES[0]
+                broken.unlink()
+                broken.write_text("stale regular file\n", encoding="utf-8")
+                report.publish_report_files(self.payloads())
+
+            for name in report.OUTPUT_NAMES:
+                path = out / name
+                self.assertTrue(path.is_symlink())
+                self.assertEqual(os.readlink(path), f"{report.CURRENT_LINK_NAME}/{name}")
+
     def test_publish_stages_complete_bundle_and_rejects_symlinked_lock(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -59,6 +92,35 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
 
             self.assertEqual(target.read_text(encoding="utf-8"), "preserve me\n")
             self.assertFalse(any((out / name).exists() for name in report.OUTPUT_NAMES))
+
+    def test_publish_rejects_symlinked_generations_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "task-completion-report"
+            out.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+            (out / report.GENERATIONS_DIRNAME).symlink_to(outside, target_is_directory=True)
+            with mock.patch.object(report, "OUT", out), mock.patch.object(
+                report, "LOCK", root / "locks" / "report.lock"
+            ), mock.patch.object(report, "ensure_output_root", side_effect=lambda: None):
+                with self.assertRaises(OSError):
+                    report.publish_report_files(self.payloads())
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_report_lock_rejects_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            outside = root / "outside"
+            outside.mkdir()
+            linked = root / "linked"
+            linked.symlink_to(outside, target_is_directory=True)
+            with mock.patch.object(report, "LOCK", linked / "locks" / "report.lock"):
+                with self.assertRaises(OSError):
+                    with report.report_lock():
+                        pass
+            self.assertFalse((outside / "locks" / "report.lock").exists())
+
     def test_completion_date_not_due_date_drives_report_day_and_week(self) -> None:
         registry = [{
             "id": "T-1-1",

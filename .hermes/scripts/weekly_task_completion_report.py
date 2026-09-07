@@ -10,9 +10,7 @@ import io
 import json
 import os
 import re
-import shutil
 import stat
-import tempfile
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -39,10 +37,12 @@ CURRENT_LINK_NAME = "current"
 
 @contextlib.contextmanager
 def report_lock():
-    LOCK.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(LOCK.parent, 0o700)
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(LOCK, flags, 0o600)
+    parent_fd = _open_directory_nofollow(LOCK.parent, create=True, mode=0o700)
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+    try:
+        fd = os.open(LOCK.name, flags, 0o600, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RuntimeError(f"refusing non-regular report lock: {LOCK}")
@@ -58,108 +58,216 @@ def report_lock():
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _open_directory_nofollow(path: Path, *, create: bool = False, mode: int = 0o755) -> int:
+    """Bind a complete directory hierarchy without following symlinks."""
+    directory = Path(path)
+    fd = os.open("/" if directory.is_absolute() else ".", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        parts = directory.parts[1:] if directory.is_absolute() else directory.parts
+        for component in parts:
+            if component in {"", "."}:
+                continue
+            if component == "..":
+                raise RuntimeError(f"refusing parent traversal in report path: {directory}")
+            try:
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, mode, dir_fd=fd)
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def ensure_output_root() -> None:
-    if OUT.is_symlink():
-        raise RuntimeError(f"refusing symlinked task-completion report root: {OUT}")
     if OUT.parent.resolve(strict=True) != Path("/home/hermes"):
         raise RuntimeError(f"refusing non-canonical task-completion report parent: {OUT.parent}")
-    OUT.mkdir(parents=False, exist_ok=True)
-
-
-def _replace_symlink(path: Path, target: str) -> None:
-    temporary = path.with_name(f".{path.name}.link.{os.getpid()}.{uuid4().hex}")
-    os.symlink(target, temporary)
+    parent_fd = _open_directory_nofollow(OUT.parent)
     try:
-        os.replace(temporary, path)
+        try:
+            os.mkdir(OUT.name, 0o755, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        output_fd = os.open(OUT.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        os.close(output_fd)
     finally:
-        temporary.unlink(missing_ok=True)
+        os.close(parent_fd)
 
 
-def _fsync_directory(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+def _replace_symlink(dir_fd: int, name: str, target: str) -> None:
+    temporary = f".{name}.link.{os.getpid()}.{uuid4().hex}"
+    os.symlink(target, temporary, dir_fd=dir_fd)
     try:
-        os.fsync(fd)
+        os.replace(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
     finally:
-        os.close(fd)
+        try:
+            os.unlink(temporary, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
 
 
-def _fixed_links_are_current() -> bool:
-    return all(
-        (OUT / name).is_symlink() and os.readlink(OUT / name) == f"{CURRENT_LINK_NAME}/{name}"
-        for name in OUTPUT_NAMES
-    )
+def _fixed_links_are_current(out_fd: int) -> bool:
+    for name in OUTPUT_NAMES:
+        try:
+            info = os.stat(name, dir_fd=out_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISLNK(info.st_mode):
+            return False
+        if os.readlink(name, dir_fd=out_fd) != f"{CURRENT_LINK_NAME}/{name}":
+            return False
+    return True
 
 
-def _initialize_generation_layout(generations: Path) -> None:
-    """Migrate a complete regular-file bundle without changing visible content."""
-    current = OUT / CURRENT_LINK_NAME
-    if current.is_symlink() and _fixed_links_are_current():
-        target = os.readlink(current)
-        prefix = f"{GENERATIONS_DIRNAME}/"
-        if target.startswith(prefix) and "/" not in target[len(prefix):] and ".." not in target:
-            return
+def _current_generation_is_complete(out_fd: int, generations_fd: int) -> bool:
+    target = os.readlink(CURRENT_LINK_NAME, dir_fd=out_fd)
+    match = re.fullmatch(r"\.generations/((?:legacy|report)-[A-Za-z0-9._-]+)", target)
+    if match is None:
         raise RuntimeError(f"refusing unsafe report current pointer: {target}")
-    if current.exists() or current.is_symlink():
-        raise RuntimeError(f"refusing unexpected report current pointer: {current}")
+    generation_fd = os.open(
+        match.group(1), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=generations_fd
+    )
+    try:
+        for name in OUTPUT_NAMES:
+            info = os.stat(name, dir_fd=generation_fd, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode):
+                return False
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(generation_fd)
 
-    existing = [OUT / name for name in OUTPUT_NAMES if (OUT / name).exists() or (OUT / name).is_symlink()]
+
+def _initialize_generation_layout(out_fd: int, generations_fd: int) -> None:
+    """Migrate a complete regular-file bundle without changing visible content."""
+    try:
+        current_info = os.stat(CURRENT_LINK_NAME, dir_fd=out_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        current_info = None
+    if current_info is not None and stat.S_ISLNK(current_info.st_mode):
+        if not _current_generation_is_complete(out_fd, generations_fd):
+            raise RuntimeError("refusing incomplete report current generation")
+        # A prior process may have switched ``current`` and stopped while
+        # repairing the stable links. Replacing every fixed link is idempotent
+        # and restores a valid layout before publishing the next generation.
+        if not _fixed_links_are_current(out_fd):
+            for name in OUTPUT_NAMES:
+                _replace_symlink(out_fd, name, f"{CURRENT_LINK_NAME}/{name}")
+            os.fsync(out_fd)
+        return
+    if current_info is not None:
+        raise RuntimeError(f"refusing unexpected report current pointer: {OUT / CURRENT_LINK_NAME}")
+
+    existing: list[str] = []
+    for name in OUTPUT_NAMES:
+        try:
+            info = os.stat(name, dir_fd=out_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("refusing unexpected pre-existing task report artifact")
+        existing.append(name)
     if existing and len(existing) != len(OUTPUT_NAMES):
         raise RuntimeError("refusing incomplete pre-existing task report bundle")
-    if any(path.is_symlink() or not path.is_file() for path in existing):
-        raise RuntimeError("refusing unexpected pre-existing task report artifact")
 
     if existing:
         legacy_id = f"legacy-{uuid4().hex}"
-        legacy_stage = Path(tempfile.mkdtemp(prefix=".legacy.", dir=generations))
+        legacy_stage = f".legacy.{uuid4().hex}"
+        os.mkdir(legacy_stage, 0o700, dir_fd=generations_fd)
+        stage_fd = os.open(legacy_stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=generations_fd)
         try:
-            for path in existing:
-                shutil.copy2(path, legacy_stage / path.name)
-            os.replace(legacy_stage, generations / legacy_id)
+            for name in existing:
+                source_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=out_fd)
+                destination_fd = os.open(
+                    name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=stage_fd
+                )
+                try:
+                    while chunk := os.read(source_fd, 1024 * 1024):
+                        view = memoryview(chunk)
+                        while view:
+                            view = view[os.write(destination_fd, view):]
+                    os.fsync(destination_fd)
+                finally:
+                    os.close(source_fd)
+                    os.close(destination_fd)
+            os.fsync(stage_fd)
         finally:
-            if legacy_stage.exists():
-                shutil.rmtree(legacy_stage)
-        _replace_symlink(current, f"{GENERATIONS_DIRNAME}/{legacy_id}")
+            os.close(stage_fd)
+        os.replace(legacy_stage, legacy_id, src_dir_fd=generations_fd, dst_dir_fd=generations_fd)
+        _replace_symlink(out_fd, CURRENT_LINK_NAME, f"{GENERATIONS_DIRNAME}/{legacy_id}")
         for name in OUTPUT_NAMES:
-            _replace_symlink(OUT / name, f"{CURRENT_LINK_NAME}/{name}")
+            _replace_symlink(out_fd, name, f"{CURRENT_LINK_NAME}/{name}")
 
 
-def _switch_generation(generation_id: str) -> None:
-    _replace_symlink(OUT / CURRENT_LINK_NAME, f"{GENERATIONS_DIRNAME}/{generation_id}")
+def _switch_generation(generation_id: str, *, out_fd: int) -> None:
+    _replace_symlink(out_fd, CURRENT_LINK_NAME, f"{GENERATIONS_DIRNAME}/{generation_id}")
 
 
 def publish_report_files(payloads: dict[str, str | bytes]) -> None:
     """Publish a complete artifact generation through one atomic pointer switch."""
     ensure_output_root()
-    generations = OUT / GENERATIONS_DIRNAME
-    generations.mkdir(mode=0o700, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".weekly-report.", dir=OUT))
+    out_fd = _open_directory_nofollow(OUT)
+    try:
+        try:
+            os.mkdir(GENERATIONS_DIRNAME, 0o700, dir_fd=out_fd)
+        except FileExistsError:
+            pass
+        generations_fd = os.open(
+            GENERATIONS_DIRNAME, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=out_fd
+        )
+    except BaseException:
+        os.close(out_fd)
+        raise
+    staging = f".weekly-report.{uuid4().hex}"
+    os.mkdir(staging, 0o700, dir_fd=out_fd)
+    staging_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=out_fd)
     try:
         for name in OUTPUT_NAMES:
             payload = payloads[name]
-            if isinstance(payload, bytes):
-                with (staging / name).open("wb") as handle:
-                    handle.write(payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            else:
-                with (staging / name).open("w", encoding="utf-8") as handle:
-                    handle.write(payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
+            raw = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=staging_fd)
+            try:
+                view = memoryview(raw)
+                while view:
+                    written = os.write(fd, view)
+                    view = view[written:]
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        os.fsync(staging_fd)
 
         with report_lock():
-            _initialize_generation_layout(generations)
+            _initialize_generation_layout(out_fd, generations_fd)
             generation_id = f"report-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex}"
-            generation_dir = generations / generation_id
-            os.replace(staging, generation_dir)
-            if not _fixed_links_are_current():
+            os.replace(staging, generation_id, src_dir_fd=out_fd, dst_dir_fd=generations_fd)
+            staging = ""
+            if not _fixed_links_are_current(out_fd):
                 for name in OUTPUT_NAMES:
-                    _replace_symlink(OUT / name, f"{CURRENT_LINK_NAME}/{name}")
-            _switch_generation(generation_id)
-            _fsync_directory(OUT)
+                    _replace_symlink(out_fd, name, f"{CURRENT_LINK_NAME}/{name}")
+            _switch_generation(generation_id, out_fd=out_fd)
+            os.fsync(generations_fd)
+            os.fsync(out_fd)
     finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+        if staging:
+            for name in OUTPUT_NAMES:
+                try:
+                    os.unlink(name, dir_fd=staging_fd)
+                except FileNotFoundError:
+                    pass
+        os.close(staging_fd)
+        if staging:
+            try:
+                os.rmdir(staging, dir_fd=out_fd)
+            except FileNotFoundError:
+                pass
+        os.close(generations_fd)
+        os.close(out_fd)
 
 
 def creation_number(task_id: str) -> int:

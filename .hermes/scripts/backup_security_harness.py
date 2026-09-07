@@ -49,6 +49,7 @@ DURABLE_STATIC_ALLOWED_SUFFIXES = {
 BLOCKED_PATH_RE = re.compile(
     r"(^|/)("
     r"projects/|"
+    r"pdf_audit_extract\.json$|"
     r"\.env(?:\..*)?$|"
     r"\.git-credentials$|"
     r"auth\.json$|"
@@ -56,6 +57,7 @@ BLOCKED_PATH_RE = re.compile(
     r"application_default_credentials|service[-_]?account.*|.*google.*credential.*|"
     r".*google.*token.*)\.json$|"
     r"hermes-tasks-calendar/|\.config/gcloud/|"
+    r"wiki/\.tmp/|"
     r".*authorization[-_]response.*|.*oauth[-_]callback.*|"
     r"config\.yaml(?:\.bak.*)?$|"
     r"\.hermes/config\.yaml(?:\.bak.*)?$|"

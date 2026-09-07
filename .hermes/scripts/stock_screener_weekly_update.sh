@@ -3,12 +3,25 @@ set -euo pipefail
 
 ROOT="/home/hermes/stock-screener"
 LOG_DIR="$ROOT/out/cron_logs"
-mkdir -p "$LOG_DIR"
-LOG_PATH="$LOG_DIR/weekly_update_$(date -u +%Y%m%dT%H%M%SZ).log"
+LOG_PATH="$LOG_DIR/weekly_update_$(date -u +%Y%m%dT%H%M%S%NZ)-$$.log"
+TMP_LOG="$(mktemp --tmpdir stock-screener-weekly.XXXXXXXX.log)"
+trap 'rm -f "$TMP_LOG"' EXIT
 set +e
-PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m stock_screener.locking -- "$ROOT/scripts/weekly_update.sh" >"$LOG_PATH" 2>&1
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 -m stock_screener.locking -- "$ROOT/scripts/weekly_update.sh" >"$TMP_LOG" 2>&1
 status=$?
 set -e
+
+# Publish only after the mutating workflow has held its canonical lock. The
+# descriptor-bound writer rejects symlinked ancestors; the unique name avoids
+# concurrent log truncation.
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" python3 - "$TMP_LOG" "$LOG_PATH" <<'PY'
+import sys
+from pathlib import Path
+
+from stock_screener.atomic_io import atomic_write_bytes
+
+atomic_write_bytes(Path(sys.argv[2]), Path(sys.argv[1]).read_bytes())
+PY
 
 if [[ "$status" -ne 0 ]]; then
   echo "Stock screener weekly update failed."

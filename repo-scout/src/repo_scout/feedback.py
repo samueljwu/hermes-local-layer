@@ -62,8 +62,8 @@ def parse_feedback_args(raw_args: str) -> dict[str, Any]:
     return {"command": "record", "full_name": full_name, "score": score, "note": note}
 
 
-def _confine_feedback_path(feedback_path: str | Path) -> Path:
-    return require_lexically_under(Path(feedback_path), DEFAULT_OUT_DIR, "feedback path")
+def _confine_feedback_path(feedback_path: str | Path, *, root: Path | None = None) -> Path:
+    return require_lexically_under(Path(feedback_path), root or DEFAULT_OUT_DIR, "feedback path")
 
 
 def record_feedback(
@@ -95,11 +95,15 @@ def record_feedback(
     return item
 
 
-def iter_feedback(feedback_path: str | Path):
-    path = Path(feedback_path)
-    if not path.exists():
+def iter_feedback(feedback_path: str | Path, *, root: Path | None = None):
+    output_root = root or DEFAULT_OUT_DIR
+    path = _confine_feedback_path(feedback_path, root=output_root)
+    try:
+        with open_output_directory(output_root, path.parent, create=False) as (_, parent_dir):
+            text = parent_dir.read_text(path.name)
+    except FileNotFoundError:
         return
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:
@@ -110,12 +114,12 @@ def iter_feedback(feedback_path: str | Path):
             yield item
 
 
-def load_feedback_profile(feedback_path: str | Path) -> dict[str, Any]:
+def load_feedback_profile(feedback_path: str | Path, *, root: Path | None = None) -> dict[str, Any]:
     repo_scores: dict[str, float] = {}
     topic_scores: dict[str, float] = {}
     language_scores: dict[str, float] = {}
     count = 0
-    for item in iter_feedback(feedback_path) or []:
+    for item in iter_feedback(feedback_path, root=root) or []:
         count += 1
         score = float(_clamp_score(item.get("score", 0)))
         repo = str(item.get("full_name", "")).lower()

@@ -79,7 +79,7 @@ def _run_scout_locked(config_path: Path, out_dir: Path, dry_run: bool = False, f
 
     interest_profile = build_interest_profile([Path(p) for p in cfg.interest_roots])
     feedback_path = feedback_path or out_dir / "feedback.jsonl"
-    feedback_profile = load_feedback_profile(feedback_path)
+    feedback_profile = load_feedback_profile(feedback_path, root=DEFAULT_OUT_DIR)
     cache_secure_dir = secure_dir.child("_cache") if secure_dir is not None else None
     try:
         client = GitHubClient(

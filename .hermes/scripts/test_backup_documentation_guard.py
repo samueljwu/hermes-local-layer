@@ -34,6 +34,24 @@ class BackupDocumentationGuardTests(unittest.TestCase):
             finally:
                 setattr(guard, "REPO", old_repo)
 
+    def test_known_pdf_audit_scratch_directories_are_not_first_class_systems(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".git").mkdir()
+            (repo / "pdf_audit_contact_sheets").mkdir()
+            (repo / "pdf_audit_text").mkdir()
+            old_repo = guard.REPO
+            try:
+                setattr(guard, "REPO", repo)
+                self.assertEqual(guard.unknown_top_level_directories(), [])
+            finally:
+                setattr(guard, "REPO", old_repo)
+
+    def test_pdf_audit_extract_file_is_generated_scratch(self):
+        guard = load_guard()
+        self.assertTrue(guard.is_generated("pdf_audit_extract.json"))
+
     def _cron_repo(self, before: dict, after: dict):
         import json
         temporary = tempfile.TemporaryDirectory()

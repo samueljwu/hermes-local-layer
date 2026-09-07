@@ -20,6 +20,38 @@ def configure_tmp_paths(tmp_path):
     return root
 
 
+def managed_bytes(root):
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob('*')
+        if path.is_file() and (path.name in {'entry_registry.json', 'index.md', 'log.md'} or (path.name.startswith('J') and path.suffix == '.md'))
+    }
+
+
+def seed_transaction_state(tmp_path):
+    root = configure_tmp_paths(tmp_path)
+    registry = [{'id': 'J1', 'title': 'Original', 'tag': 'ideas', 'date': '2026-05-07', 'tags': [], 'status': 'active', 'original': 'raw', 'entry': 'clean', 'related': []}]
+    journal_ops.write_registry(registry)
+    journal_ops.regenerate_entries(registry)
+    journal_ops.regenerate_index(registry)
+    journal_ops.atomic_write_text(journal_ops.LOG_PATH, '# Journal Log\n\noriginal\n')
+    return root
+
+
+def inject_one_publication_failure(monkeypatch, fail_at):
+    original = journal_ops.atomic_write_text
+    calls = 0
+
+    def failing(path, text):
+        nonlocal calls
+        calls += 1
+        if calls == fail_at:
+            raise OSError('injected publication failure')
+        return original(path, text)
+
+    monkeypatch.setattr(journal_ops, 'atomic_write_text', failing)
+
+
 def test_journal_lock_rejects_symlink_without_truncating_target(tmp_path):
     configure_tmp_paths(tmp_path)
     target = tmp_path / 'protected.txt'
@@ -102,6 +134,32 @@ def test_add_rejects_invalid_entry_before_registry_log_or_derived_writes(tmp_pat
     assert journal_ops.INDEX_PATH.read_text(encoding='utf-8') == 'original index\n'
     assert journal_ops.LOG_PATH.read_text(encoding='utf-8') == 'original log\n'
     assert not (root / 'ideas').exists()
+
+
+def test_add_rolls_back_registry_entry_index_and_log_on_failure(tmp_path, monkeypatch):
+    root = seed_transaction_state(tmp_path)
+    before = managed_bytes(root)
+    inject_one_publication_failure(monkeypatch, 3)
+    try:
+        journal_ops.add_entry('New', 'new raw', 'new clean', tag='research', entry_date='2026-05-08')
+    except OSError as exc:
+        assert 'injected publication failure' in str(exc)
+    else:
+        raise AssertionError('publication failure was not raised')
+    assert managed_bytes(root) == before
+
+
+def test_archive_rolls_back_registry_entry_index_and_log_on_failure(tmp_path, monkeypatch):
+    root = seed_transaction_state(tmp_path)
+    before = managed_bytes(root)
+    inject_one_publication_failure(monkeypatch, 4)
+    try:
+        journal_ops.archive_entry('J1', 'test')
+    except OSError:
+        pass
+    else:
+        raise AssertionError('publication failure was not raised')
+    assert managed_bytes(root) == before
 
 
 def test_validate_detects_index_count_mismatch():

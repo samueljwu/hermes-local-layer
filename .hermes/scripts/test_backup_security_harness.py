@@ -23,6 +23,28 @@ def load_harness():
 
 
 class BackupSecurityHarnessTests(unittest.TestCase):
+    def test_blocks_generated_wiki_tmp_tree(self):
+        harness = load_harness()
+        self.assertTrue(harness.path_is_blocked('wiki/.tmp/extracted.txt'))
+        self.assertTrue(harness.path_is_blocked('wiki/.tmp/renders/page-001.png'))
+        self.assertFalse(harness.path_is_blocked('wiki/src/raw/assets/page-001.png'))
+        ignored = subprocess.run(
+            ['git', 'check-ignore', '--no-index', '-q', 'wiki/.tmp/extracted.txt'],
+            cwd=Path('/home/hermes'),
+            check=False,
+        )
+        self.assertEqual(ignored.returncode, 0)
+
+    def test_blocks_top_level_pdf_audit_extract_scratch(self):
+        harness = load_harness()
+        self.assertTrue(harness.path_is_blocked('pdf_audit_extract.json'))
+        ignored = subprocess.run(
+            ['git', 'check-ignore', '--no-index', '-q', 'pdf_audit_extract.json'],
+            cwd=Path('/home/hermes'),
+            check=False,
+        )
+        self.assertEqual(ignored.returncode, 0)
+
     def test_blocks_root_and_nested_live_config_yaml(self):
         harness = load_harness()
         self.assertTrue(harness.path_is_blocked('config.yaml'))
