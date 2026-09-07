@@ -8,9 +8,12 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 SYNC = Path('/home/hermes/tasks/_tools/notion_sync.py')
 COMMAND = [sys.executable, '-B', str(SYNC), 'sync', '--apply', '--max-actions', '10']
+PROJECT_COMMAND = [sys.executable, '-B', str(SYNC.with_name('notion_projects.py')),
+                   'sync', '--apply', '--max-actions', '10']
 
 
 def run_connector(command, *, timeout):
@@ -41,7 +44,23 @@ def run_connector(command, *, timeout):
     return subprocess.CompletedProcess(command, proc.returncode, stdout, '')
 
 
-def main() -> int:
+def run_projects(*, timeout):
+    try:
+        result = run_connector(PROJECT_COMMAND, timeout=timeout)
+        report = json.loads(result.stdout)
+        if result.returncode == 75 and report == {'busy': True} and type(report.get('busy')) is bool:
+            return
+        if (result.returncode != 0 or not isinstance(report, dict)
+                or not isinstance(report.get('conflicts'), dict)
+                or report['conflicts']
+                or any(type(report.get(k)) is not int or report[k] < 0
+                       for k in ('planned', 'applied', 'pending'))):
+            raise ValueError('project report requires review')
+    except Exception:
+        print('ALERT: Hermes Tasks Notion project sync needs review. Existing task reconciliation remains independent. Run python3 /home/hermes/tasks/_tools/notion_projects.py plan; do not reset project recovery state.')
+
+
+def run_tasks() -> int:
     try:
         result = run_connector(COMMAND, timeout=110)
     except subprocess.TimeoutExpired:
@@ -68,10 +87,23 @@ def main() -> int:
             raise ValueError('invalid report')
         if report['conflicts']:
             print('ALERT: Hermes Tasks Notion sync reports conflicts. The local registry remains canonical; inspect the connector plan before resolving either version.')
+            return 0
     except (ValueError, TypeError):
         print('ALERT: Hermes Tasks Notion sync returned an invalid verification report. Inspect the local connector before assuming synchronization succeeded.')
+        return 0
     # Return success even on a domain failure: deliver the fixed alert without
     # launching the scheduler\'s autonomous code-repair path on external data.
+    return 0
+
+
+def main() -> int:
+    started = time.monotonic()
+    run_tasks()
+    # Catalog writes cannot overwrite task relations. Run even after task
+    # conflicts: an unmapped new project must be provisioned for the next cycle.
+    remaining = 110 - (time.monotonic() - started)
+    if remaining >= 15:
+        run_projects(timeout=remaining)
     return 0
 
 

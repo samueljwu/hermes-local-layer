@@ -11,28 +11,69 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import sys
 import uuid
+
+# Shared schema is pure; load source-relative without importing task_ops or state.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".hermes" / "scripts"))
+from task_schema import validate_project_registry
 from notion_transport import (Client, State, SyncError, SyncBusy, require, SOURCE_ID, DB_ID,
     STATE_ROOT, UUID_RE, open_dir, strict_json, query_all)
 
-FIELDS = ('name', 'tag', 'status', 'start_date', 'due_date', 'priority', 'recurrence', 'notes')
-TYPES = dict(zip(FIELDS, ('title', 'select', 'status', 'date', 'date', 'select', 'rich_text', 'rich_text')))
+FIELDS = ('name', 'project_id', 'done', 'start_date', 'due_date', 'priority', 'recurrence', 'notes')
+TYPES = dict(zip(FIELDS, ('title', 'relation', 'checkbox', 'date', 'date', 'select', 'rich_text', 'rich_text')))
+PROJECT_ID_RE = re.compile(r'P-[1-9][0-9]*')
+PROJECT_SOURCE = '3d463936-8ded-80e7-82bd-000bb7b17b11'
+
+
+class ProjectColumns(dict):
+    """Per-reconciliation immutable-by-convention relation lookup; never global."""
+    def __init__(self, columns, catalog):
+        super().__init__(columns)
+        require(isinstance(catalog, dict) and all(
+            isinstance(k, str) and PROJECT_ID_RE.fullmatch(k) and isinstance(v, dict) and
+            set(v) == {'name', 'page_id'} and isinstance(v['name'], str) and bool(v['name'].strip()) and
+            isinstance(v['page_id'], str) and UUID_RE.fullmatch(v['page_id'])
+            for k, v in catalog.items()), 'invalid-project-catalog')
+        require(len({v['name'] for v in catalog.values()}) == len(catalog), 'duplicate-project-name')
+        self.catalog = deepcopy(catalog)
+        self.reverse = {v['page_id']: k for k, v in self.catalog.items()}
+        require(len(self.reverse) == len(self.catalog), 'duplicate-project-page')
+        self.other = next((k for k, v in self.catalog.items() if v['name'] == 'Other'), None)
+
+
+def load_project_catalog(core, store):
+    """Explicit local inputs only. Missing new bindings do not block known projects.
+
+    Requires core.read_projects() and store.read('projects.json'); no fallback I/O.
+    Pending catalog creates are deliberately tolerated, but never used as bindings.
+    """
+    from notion_projects import validate_state as validate_projects
+    projects = core.read_projects()
+    require(not validate_project_registry(projects), 'invalid-project-registry')
+    state = validate_projects(store.read('projects.json'))
+    names = {p['id']: p['name'] for p in projects}
+    require(set(state['bindings']) <= set(names), 'unknown-bound-project')
+    return {k: {'name': names[k], 'page_id': b['page_id']} for k, b in state['bindings'].items()}
+
+
+def relation_catalog(columns):
+    require(isinstance(columns, ProjectColumns), 'project-catalog-required')
+    return columns.catalog
 MARKER = 'hermes_task_key'
 # Exact identities for the single approved SOURCE_ID; preserve encoded tokens.
-PROPERTY_IDS = {'name': 'title', 'start_date': '%3BBh%3B', 'tag': 'Qcac',
-                'recurrence': 'SYBU', 'status': 'US%5Cb', 'hermes_task_key': 'ZyNW',
+PROPERTY_IDS = {'name': 'title', 'start_date': '%3BBh%3B', 'project_id': 'H%3BQa',
+                'recurrence': 'SYBU', 'hermes_task_key': 'ZyNW',
                 'priority': 'aBIM', 'due_date': 'h%5Cw%3F', 'notes': 'so%7DJ'}
 KEY_RE = re.compile(r'hermes_tasks:[1-9][0-9]*')
 ID_RE = re.compile(r'T(?:([1-9][0-9]*)|-[1-9][0-9]*-([1-9][0-9]*))')
-OPEN = {'not_started', 'in_progress'}
-STATUSES = OPEN | {'completed', 'cancelled'}
 PRIORITIES = {'low', 'medium', 'high', 'top', 'urgent'}
 
 def digest(value):
@@ -47,11 +88,12 @@ def key(row):
 def fields(row, *, blank=False):
     require(isinstance(row, dict) and 'task' not in row, 'invalid-record')
     out = {f: row.get(f) for f in FIELDS}
-    for f in ('name', 'tag', 'status', 'priority', 'notes'):
+    for f in ('name', 'project_id', 'priority', 'notes'):
         require(isinstance(out[f], str), 'invalid-scalar')
     require(blank or bool(out['name'].strip()), 'blank-name')
-    require(bool(out['tag'].strip()) and len(out['tag']) <= 100 and ',' not in out['tag'], 'invalid-tag')
-    require(out['status'] in STATUSES and out['priority'] in PRIORITIES, 'invalid-vocabulary')
+    require(PROJECT_ID_RE.fullmatch(out['project_id']), 'invalid-project-id')
+    require(type(out['done']) is bool, 'invalid-done')
+    require(out['priority'] in PRIORITIES, 'invalid-vocabulary')
     for f in ('start_date', 'due_date'):
         v = out[f]
         if v is not None:
@@ -109,7 +151,13 @@ def properties(values, columns, marker=None):
         typ = TYPES[f]
         if typ in {'title', 'rich_text'}:
             value = rich_text(value or '')
-        elif typ in {'select', 'status'}:
+        elif typ == 'relation':
+            catalog = relation_catalog(columns)
+            require(value in catalog, 'unmapped-project-id')
+            value = [{'id': catalog[value]['page_id']}]
+        elif typ == 'checkbox':
+            require(type(value) is bool, 'invalid-done')
+        elif typ == 'select':
             value = {'name': value}
         else:
             value = None if value is None else {'start': value, 'end': None, 'time_zone': None}
@@ -119,13 +167,23 @@ def properties(values, columns, marker=None):
         out[MARKER] = {'rich_text': rich_text(marker)}
     return out
 
-def schema(api):
+def checkbox_binding(value):
+    require(isinstance(value, dict) and set(value) == {'source_id', 'done_property_id'} and
+            value['source_id'] == SOURCE_ID and isinstance(value['done_property_id'], str) and
+            bool(re.fullmatch(r'[A-Za-z0-9_%\\:;?@!$&*+.,~=-]{1,128}', value['done_property_id'])) and
+            value['done_property_id'] not in {*PROPERTY_IDS.values(), 'US%5Cb'}, 'invalid-checkbox-binding')
+    return deepcopy(value)
+
+
+def schema(api, catalog=None, *, mapping=None):
+    binding = checkbox_binding(mapping)
+    property_ids = {**PROPERTY_IDS, 'done': binding['done_property_id']}
     source = api.request('GET', '/data_sources/' + SOURCE_ID)
     require(source.get('object') == 'data_source' and source.get('id') == SOURCE_ID and
             source.get('parent', {}).get('database_id') == DB_ID, 'wrong-container')
     props = source.get('properties')
     require(isinstance(props, dict), 'invalid-schema')
-    columns = {f: f for f in FIELDS}
+    columns = ProjectColumns({f: 'project' if f == 'project_id' else f for f in FIELDS}, catalog or {})
     require(not ('start_date' in props and 'Start date' in props), 'ambiguous-start-date')
     if 'start_date' not in props:
         columns['start_date'] = 'Start date'
@@ -134,12 +192,18 @@ def schema(api):
         name = columns.get(f, f)
         prop = props.get(name, {})
         require(isinstance(prop, dict) and prop.get('type') == typ and isinstance(prop.get('id'), str) and
-                prop['id'] == PROPERTY_IDS[f] and prop['id'] not in seen, 'schema-property-mismatch')
+                prop['id'] == property_ids[f] and prop['id'] not in seen, 'schema-property-mismatch')
         seen.add(prop['id'])
-        if f in {'status', 'priority'}:
+        if f == 'project_id':
+            relation = prop.get('relation', {})
+            require(relation.get('data_source_id') == PROJECT_SOURCE and
+                    relation.get('type') == 'dual_property' and
+                    relation.get('dual_property', {}).get('synced_property_id') == 'oQv%5B',
+                    'project-relation-schema-mismatch')
+        if f == 'priority':
             options = prop.get(typ, {}).get('options')
             require(isinstance(options, list) and all(isinstance(o, dict) and isinstance(o.get('name'), str) for o in options), 'invalid-schema-options')
-            required = STATUSES if f == 'status' else PRIORITIES
+            required = PRIORITIES
             require(required <= {o['name'] for o in options}, 'missing-schema-options')
     return columns
 
@@ -170,9 +234,22 @@ def page_fields(page, columns, *, blank=False, intake=False):
             value = plain(value)
             if f == 'recurrence':
                 value = value or None
-        elif typ in {'select', 'status'}:
-            if intake and value is None and f in {'tag', 'priority'}:
-                value = {'name': 'Other' if f == 'tag' else 'medium'}
+        elif typ == 'relation':
+            relation_catalog(columns)
+            require(prop.get('has_more', False) is False and isinstance(value, list), 'incomplete-project-relation')
+            if intake and not value:
+                require(columns.other is not None, 'other-project-unmapped')
+                value = columns.other
+            else:
+                require(len(value) == 1 and isinstance(value[0], dict) and
+                        isinstance(value[0].get('id'), str), 'invalid-project-relation')
+                require(value[0]['id'] in columns.reverse, 'unknown-project-relation')
+                value = columns.reverse[value[0]['id']]
+        elif typ == 'checkbox':
+            require(type(value) is bool, 'invalid-done')
+        elif typ == 'select':
+            if intake and value is None and f == 'priority':
+                value = {'name': 'medium'}
             require(isinstance(value, dict) and isinstance(value.get('name'), str), 'missing-remote-option')
             value = value['name']  # IDs, color, nullable description are server metadata.
         elif value is not None:
@@ -221,7 +298,7 @@ def validate_state(state):
     for k, op in state['pending'].items():
         require(isinstance(k, str) and (KEY_RE.fullmatch(k) or UUID_RE.fullmatch(k)), 'invalid-operation-key')
         required = {'kind', 'phase', 'operation_id', 'task_id', 'page_id', 'source_revision', 'before', 'target', 'remote_revision', 'result_revision', 'marker', 'create_sent'}
-        require(isinstance(op, dict) and set(op) == required and op['kind'] in {'pull', 'push', 'create', 'intake', 'delete'} and
+        require(isinstance(op, dict) and set(op) == required and op['kind'] in {'pull', 'push', 'create', 'intake', 'delete', 'cancel'} and
                 op['phase'] in {'prepared', 'committed'} and isinstance(op['operation_id'], str) and UUID_RE.fullmatch(op['operation_id']), 'invalid-pending')
         require(op['task_id'] is None or (isinstance(op['task_id'], str) and ID_RE.fullmatch(op['task_id'])), 'invalid-pending-task')
         require(op['page_id'] is None or (isinstance(op['page_id'], str) and UUID_RE.fullmatch(op['page_id'])), 'invalid-pending-page')
@@ -267,21 +344,59 @@ class Core:
             require(isinstance(rows, list) and not m.validate_registry(rows, check_notes=False), 'invalid-full-registry')
             validate_rows(rows)
             return rows
+    def read_projects(self):
+        with self.module.file_lock():
+            return self.module.read_projects()
     def apply_external_change(self, **kwargs):
         return self.module.apply_external_change(**kwargs)
     def delete_external_task(self, **kwargs):
         return self.module.delete_external_task(**kwargs)
+    def cancellation_receipt(self, mark, page_id):
+        with self.module.file_lock():
+            receipt = self.module.read_deletions().get(mark.split(':')[1])
+            return validate_cancellation(receipt, mark, page_id) if receipt is not None else None
     def deletion_receipt(self, op):
         with self.module.file_lock():
             receipt = self.module.read_deletions().get(op['marker'].split(':')[1])
             return bool(receipt and receipt['operation_id'] == op['operation_id'] and
                         receipt['page_id'] == op['page_id'] and receipt['revision'] == op['source_revision'])
 
-def discover(api, columns, local, state):
+def validate_cancellation(receipt, mark, page_id):
+    require(isinstance(receipt, dict) and receipt.get('reason') == 'cancelled' and
+            isinstance(receipt.get('archived_at'), str) and bool(receipt['archived_at']) and
+            isinstance(receipt.get('operation_id'), str) and bool(receipt['operation_id']) and
+            receipt.get('page_id') in (None, page_id) and
+            key({'id': receipt.get('task_id')}) == mark and
+            isinstance(receipt.get('snapshot'), dict), 'invalid-cancellation-receipt')
+    require(set(receipt) == {'operation_id', 'page_id', 'revision', 'task_id', 'prior_operations',
+                            'log_entry', 'snapshot', 'reason', 'archived_at'} and
+            isinstance(receipt['prior_operations'], list) and
+            all(isinstance(v, str) for v in receipt['prior_operations']) and
+            isinstance(receipt['log_entry'], str), 'invalid-cancellation-receipt')
+    try:
+        require(datetime.fromisoformat(receipt['archived_at']).tzinfo is not None, 'invalid-cancellation-time')
+    except ValueError:
+        raise SyncError('invalid-cancellation-time') from None
+    snapshot = receipt['snapshot']
+    require(key(snapshot) == mark and snapshot['id'] == receipt['task_id'] and
+            type(receipt.get('revision')) is int and revision(snapshot) == receipt['revision'] and
+            snapshot.get('_notion_page_id') in (None, page_id), 'cancellation-snapshot-mismatch')
+    fields(snapshot)
+    return deepcopy(receipt)
+
+
+def cancellation(core, mark, page_id):
+    reader = getattr(core, 'cancellation_receipt', None)
+    receipt = reader(mark, page_id) if reader else None
+    return validate_cancellation(receipt, mark, page_id) if receipt is not None else None
+
+
+def discover(api, columns, local, state, cancellations=None):
+    cancellations = cancellations or {}
     pages, by_marker, unowned = {}, {}, {}
     policy = state.get('deletion_policy', {})
     for page in query_all(api):
-        page_identity(page, allow_trash=bool(policy))
+        page_identity(page, allow_trash=bool(policy or cancellations))
         pid = page['id']
         require(pid not in pages, 'duplicate-page')
         pages[pid] = page
@@ -302,12 +417,12 @@ def discover(api, columns, local, state):
             unowned[pid] = page
     for k, binding in state['bindings'].items():
         pending_delete = state['pending'].get(k, {}).get('kind') == 'delete'
-        require(k in local or pending_delete, 'missing-canonical-binding')
+        require(k in local or pending_delete or k in cancellations, 'missing-canonical-binding')
         pid = binding['page_id']
         require(k not in by_marker or by_marker[k] == pid, 'binding-marker-mismatch')
         # Query absence is NOT a deletion signal. GET every bound page, including absent ones.
         page = api.request('GET', '/pages/' + pid)
-        page_identity(page, pid, allow_trash=bool(policy))
+        page_identity(page, pid, allow_trash=bool(policy or cancellations))
         require(marker(page) == k, 'ownership-changed')
         page_fields(page, columns)
         require(pid not in unowned, 'owned-marker-cleared')
@@ -329,7 +444,7 @@ def initialize(api, core, store, *, ignored, apply=False, verified_baselines=Non
     state = {'version': 1, 'source_id': SOURCE_ID, 'database_id': DB_ID, 'ignored': sorted(ignored), 'bindings': {}, 'pending': {}}
     validate_state(state)
     local = validate_rows(core.read())
-    columns = schema(api)
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
     pages, owned, _ = discover(api, columns, local, state)
     conflicts = {}
     seeds = verified_baselines or {}
@@ -366,6 +481,9 @@ def execute_operation(api, core, store, state, slot, columns, owned):
     Canonical dedupe owns replay semantics (especially recurrence/email side effects).
     """
     op = state['pending'][slot]
+    if op['kind'] == 'cancel':
+        execute_cancel(api, core, store, state, slot, columns)
+        return
     if op['kind'] == 'delete':
         execute_delete(api, core, store, state, slot, columns)
         return
@@ -452,7 +570,7 @@ def enable_deletions(api, core, store, *, apply=False):
     require('deletion_policy' not in state, 'deletion-policy-already-enabled')
     require(not state['pending'], 'pending-operations-block-cutover')
     local = validate_rows(core.read())
-    columns = schema(api)
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
     active_container(api)
     policy = {'enrolled': {}, 'excluded': {}, 'deleted': {}}
     observations, conflicts = {}, {}
@@ -488,6 +606,44 @@ def enable_deletions(api, core, store, *, apply=False):
             store.write(state)
     return {'planned': len(policy['enrolled']), 'excluded': len(policy['excluded']),
             'applied': int(apply and not conflicts), 'conflicts': conflicts}
+
+
+def execute_cancel(api, core, store, state, slot, columns):
+    op = state['pending'][slot]
+    binding = state['bindings'][slot]
+    require(binding['page_id'] == op['page_id'], 'cancellation-binding-changed')
+    receipt = cancellation(core, slot, op['page_id'])
+    require(receipt is not None and op['operation_id'] == str(uuid.uuid5(uuid.NAMESPACE_URL, digest(receipt))) and
+            fields(receipt['snapshot']) == op['target'] and
+            receipt['revision'] == op['source_revision'] and receipt['task_id'] == op['task_id'],
+            'cancellation-receipt-changed')
+    require(slot not in validate_rows(core.read()), 'cancelled-task-reappeared')
+    active_container(api)
+    # Revalidate pinned schema immediately before the destructive (recoverable) PATCH.
+    schema(api, columns.catalog, mapping=store.read('checkbox-schema.json'))
+    page = api.request('GET', '/pages/' + op['page_id'])
+    page_identity(page, op['page_id'], allow_trash=True)
+    require(marker(page) == slot and page_fields(page, columns) == op['before'], 'cancellation-remote-changed')
+    if not page['in_trash']:
+        require(page['last_edited_time'] == op['remote_revision'], 'cancellation-remote-changed')
+        require(cancellation(core, slot, op['page_id']) == receipt and
+                slot not in validate_rows(core.read()), 'cancellation-source-changed')
+        api.request('PATCH', '/pages/' + op['page_id'], {'in_trash': True})
+    after = api.request('GET', '/pages/' + op['page_id'])
+    page_identity(after, op['page_id'], allow_trash=True)
+    require(after['in_trash'] is True and marker(after) == slot and
+            page_fields(after, columns) == op['before'], 'cancellation-readback-failed')
+    active_container(api)
+    schema(api, columns.catalog, mapping=store.read('checkbox-schema.json'))
+    require(cancellation(core, slot, op['page_id']) == receipt and
+            slot not in validate_rows(core.read()), 'cancellation-source-changed')
+    policy = state.setdefault('deletion_policy', {'enrolled': {}, 'excluded': {}, 'deleted': {}})
+    policy['enrolled'].pop(slot, None)
+    policy['excluded'].pop(slot, None)
+    policy['deleted'][slot] = op['page_id']
+    del state['bindings'][slot]
+    del state['pending'][slot]
+    store.write(state)
 
 
 def execute_delete(api, core, store, state, slot, columns):
@@ -540,11 +696,31 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
         return {'planned': len(repairs), 'selected': len(selected), 'attempted': len(selected) if apply else 0,
                 'applied': applied, 'pending': len(state['pending']), 'conflicts': conflicts}
     local = validate_rows(core.read())
-    columns = schema(api)
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
     if 'deletion_policy' in state:
         active_container(api)
-    pages, owned, unowned = discover(api, columns, local, state)
+    cancellations = {}
+    for k, binding in state['bindings'].items():
+        if k not in local and state['pending'].get(k, {}).get('kind') != 'delete':
+            receipt = cancellation(core, k, binding['page_id'])
+            require(receipt is not None, 'missing-canonical-binding')
+            cancellations[k] = receipt
+    pages, owned, unowned = discover(api, columns, local, state, cancellations)
     conflicts, candidates = {}, []
+    for k, receipt in sorted(cancellations.items()):
+        if k in state['pending']:
+            continue
+        binding = state['bindings'][k]
+        page = pages[binding['page_id']]
+        remote = page_fields(page, columns)
+        if remote != binding['baseline']:
+            conflicts[k] = 'cancellation-baseline-conflict'
+            continue
+        op = operation('cancel', receipt['snapshot'], page, remote, fields(receipt['snapshot']), k)
+        # Pin the complete original archive (including metadata) using the existing
+        # journal identity, without adding a second receipt store or pending shape.
+        op['operation_id'] = str(uuid.uuid5(uuid.NAMESPACE_URL, digest(receipt)))
+        candidates.append((k, op))
     pending_keys = {op['marker'] for op in state['pending'].values()}
     for slot, op in sorted(state['pending'].items()):
         candidates.append((slot, op))
@@ -552,13 +728,16 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
         if k in pending_keys or k in state['pending']:
             continue
         current = fields(row)
+        if current['project_id'] not in columns.catalog:
+            conflicts[k] = 'unmapped-project-id'
+            continue  # Catalog pass can create it; never journal an unsendable task.
         binding = state['bindings'].get(k)
         if binding is None:
             if k in owned:
                 conflicts[k] = 'uninitialized-owned-page'
             elif row.get('_notion_page_id'):
                 conflicts[k] = 'unbound-origin-page'
-            elif row['status'] in OPEN:
+            elif row['done'] is False:
                 candidates.append((k, operation('create', row, None, None, current, k)))
             continue
         page = pages[binding['page_id']]
@@ -583,9 +762,7 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
             continue
         if current == remote == baseline:
             continue
-        if baseline['status'] not in OPEN and (current['status'] in OPEN or remote['status'] in OPEN):
-            conflicts[k] = 'reopen-blocked'
-        elif current == remote:
+        if current == remote:
             candidates.append((k, operation('push', row, page, remote, current, k)))
         elif current == baseline:
             candidates.append((k, operation('pull', row, page, remote, remote, k)))
@@ -602,7 +779,7 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
         if not plain(title['title']).strip():
             continue  # Draft rows legitimately lack every other required option.
         value = page_fields(page, columns, intake=True)
-        if value['status'] not in OPEN:
+        if value['done']:
             continue  # Never import historical closed records.
         if any(r.get('_notion_page_id') == pid for r in local.values()):
             conflicts[pid] = 'unbound-existing-intake'
@@ -613,7 +790,7 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
     for slot, op in candidates:
         if len(selected) >= max_actions:
             break
-        if op['kind'] == 'delete':
+        if op['kind'] in {'delete', 'cancel'}:
             if deletes >= max_deletes:
                 continue
             deletes += 1
@@ -676,7 +853,7 @@ def resolve_equal(api, core, store, *, key_value, expected_operation_id, expecte
         require(op['kind'] != 'intake' or row.get('_notion_page_id') == op['page_id'], 'resolution-origin-mismatch')
     if uncommitted_delete:
         active_container(api)
-    columns = schema(api)
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
     _, owned, _ = discover(api, columns, local, state)
     require(owned.get(key_value) == op['page_id'], 'resolution-ownership-mismatch')
     page, remote = get_page(api, op['page_id'], columns, key_value)

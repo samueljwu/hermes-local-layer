@@ -1,10 +1,24 @@
-"""Offline name-only/four-state consumer contracts; no runtime calls."""
+"""Offline name-only/boolean consumer contracts; no runtime calls."""
 import importlib.util
 from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
+
+PROJECTS = [{"id": "P-1", "name": "Research"}, {"id": "P-2", "name": "Archive"}]
+
+def canonical(**fields):
+    from datetime import date, timedelta
+    row = dict(due_date=None, reminder=None, recurrence=None, priority='medium', notes='', project_id='P-1')
+    row.update(fields)
+    if row['due_date']:
+        row['reminder'] = (date.fromisoformat(row['due_date']) - timedelta(days=1)).isoformat()
+    return row
+
+def joined(rows):
+    names = {p['id']: p['name'] for p in PROJECTS}
+    return [dict(row, project_name=names[row['project_id']]) for row in rows]
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
@@ -18,36 +32,50 @@ def load(name, path):
 
 @pytest.fixture
 def rows():
-    return [dict(id=f'T-{i}-{i}', name=f'Name {status}', status=status,
-                 tag='Research' if i < 3 else 'Archive', notes='fixture', priority='medium')
-            for i, status in enumerate(('not_started', 'in_progress', 'completed', 'cancelled'), 1)]
+    return [canonical(id=f'T-{i}-{i}', name=f'Name {i}', done=done,
+                 project_id='P-1' if i < 3 else 'P-2', notes='fixture', priority='medium')
+            for i, done in enumerate((False, False, True, True), 1)]
 
 def test_dashboard_four_states_and_all_record_commands(rows):
     module = load('schema_dashboard', SCRIPTS / 'update_tasks_dashboard.py')
-    text = module.build_dashboard(rows)
-    assert 'Name not_started' in text and 'Name in_progress' in text
-    assert 'Name completed' not in text and 'Name cancelled' not in text
+    text = module.build_dashboard(rows, projects=PROJECTS)
+    assert 'Name 1' in text and 'Name 2' in text
+    assert 'Name 3' not in text and 'Name 4' not in text
     assert '/archive' in text
 
-@pytest.mark.parametrize('bad', [None, 'pending', 'unknown'])
+@pytest.mark.parametrize('bad', [None, 'pending', 'unknown', 0, 1, [], {}])
 def test_display_consumers_fail_closed(bad):
-    row = {'id': 'T-1-1', 'name': 'Invalid', 'tag': 'Research'}
+    row = {'id': 'T-1-1', 'name': 'Invalid', 'project_id': 'P-1'}
     if bad is not None:
-        row['status'] = bad
+        row['done'] = bad
     dashboard = load('schema_dashboard', SCRIPTS / 'update_tasks_dashboard.py')
     tags = load('schema_tags', SCRIPTS.parent / 'plugins/tasks-tags/__init__.py')
     with pytest.raises(ValueError):
-        dashboard.build_dashboard([row])
+        dashboard.build_dashboard([row], projects=PROJECTS)
     with pytest.raises(ValueError):
         tags._render_tag([row], 'Research')
 
+def test_pending_tasks_in_multiple_projects_remain_open():
+    dashboard = load('schema_dashboard', SCRIPTS / 'update_tasks_dashboard.py')
+    rows = [canonical(id='T-1-1', name='Research pending', done=False, project_id='P-1'),
+            canonical(id='T-2-2', name='Archive pending', done=False, project_id='P-2')]
+    text = dashboard.build_dashboard(rows, projects=PROJECTS)
+    assert 'Research pending' in text and 'Archive pending' in text
+
+@pytest.mark.parametrize('legacy', ['not_started', 'in_progress', 'completed', 'cancelled'])
+def test_dashboard_rejects_legacy_status_even_with_valid_checkbox(legacy):
+    dashboard = load('schema_dashboard', SCRIPTS / 'update_tasks_dashboard.py')
+    row = canonical(id='T-1-1', name='Invalid', done=False, status=legacy)
+    with pytest.raises(ValueError):
+        dashboard.build_dashboard([row], projects=PROJECTS)
+
 def test_dashboard_backfills_five_and_keeps_long_term():
     module = load('schema_dashboard', SCRIPTS / 'update_tasks_dashboard.py')
-    rows = [dict(id=f'T-{i}-{i}', name=f'Near {i}', status='in_progress',
-                 due_date='2020-01-01', tag='Research') for i in range(1, 7)]
-    rows.insert(0, dict(id='T-7-7', name='Long priority', status='not_started',
-                        due_date='2999-01-01', priority='high', tag='Research'))
-    text = module.build_dashboard(rows)
+    rows = [canonical(id=f'T-{i}-{i}', name=f'Near {i}', done=False,
+                 due_date='2020-01-01', project_id='P-1') for i in range(1, 7)]
+    rows.insert(0, canonical(id='T-7-7', name='Long priority', done=False,
+                        due_date='2999-01-01', priority='high', project_id='P-1'))
+    text = module.build_dashboard(rows, projects=PROJECTS)
     near, long = text.split('**Top long-term priorities**')
     assert all(f'Near {i}' in near for i in range(1, 6))
     assert 'Near 6' not in text and 'Long priority' not in near
@@ -56,23 +84,23 @@ def test_dashboard_backfills_five_and_keeps_long_term():
 def test_tags_single_tag_open_count_and_all_record_registration(rows):
     tags = load('schema_tags', SCRIPTS.parent / 'plugins/tasks-tags/__init__.py')
     sync = load('schema_sync', SCRIPTS / 'discord_tag_commands.py')
-    with patch.object(tags, '_read_registry', return_value=rows):
+    with patch.object(tags, '_read_registry', return_value=joined(rows)):
         assert '2 open task(s)' in tags._handle_tags()
-        assert 'Name in_progress' in tags._handle_tag_slug('research')
+        assert 'Name 2' in tags._handle_tag_slug('research')
         assert 'No open tasks' in tags._handle_tag_slug('archive')
-    assert sync.get_current_tags(rows) == {'Research', 'Archive'}
+    assert sync.get_current_tags(rows, projects=PROJECTS) == {'Research', 'Archive'}
     import discord_tag_commands as shared_sync
     registered = {}
     class Context:
         def register_command(self, name, **kwargs):
             registered[name] = kwargs
             return object()
-    with patch.object(tags, '_read_registry', return_value=rows), \
+    with patch.object(tags, '_read_registry', return_value=joined(rows)), \
          patch.object(shared_sync, 'reserved_commands', return_value=set()):
         assert tags.LiveTags(Context()).refresh_handlers() == {'archive': 'Archive', 'research': 'Research'}
     assert set(registered) == {'archive', 'research'}
     assert all('open tasks' in entry['description'] for entry in registered.values())
-    assert 'Name' not in tags._render_tag(rows, 'Res')
+    assert 'Name' not in tags._render_tag(joined(rows), 'Res')
 
 @pytest.mark.parametrize('description', ["Show all pending tasks tagged 'Research'", "Show pending tasks for the Research tag.", "Show all open tasks tagged 'Research'", "Show open tasks for the Research tag."])
 def test_exact_old_new_command_ownership(description):

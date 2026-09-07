@@ -9,7 +9,7 @@ Modes:
 - --mode tomorrow: reminders for tasks due tomorrow.
 - --mode today: reminders for tasks due today.
 
-Reads the canonical task registry fresh. Never reminds for completed/cancelled tasks.
+Reads the canonical task registry fresh. Only reminds for done=False tasks; cancellations are absent from the registry.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-LOCAL_SCRIPTS = Path("/home/hermes/.hermes/scripts")
+LOCAL_SCRIPTS = Path(__file__).resolve().parent
 if str(LOCAL_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(LOCAL_SCRIPTS))
 from local_ops import resolve_tasks_root  # noqa: E402

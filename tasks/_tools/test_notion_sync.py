@@ -31,13 +31,15 @@ class BusyLockTests(unittest.TestCase):
 
 
 SAMPLES = [str(uuid.UUID(int=i)) for i in range(1, 4)]
-COLS = {f: f for f in s.FIELDS}
-OBSERVED_IDS = {'name': 'title', 'start_date': '%3BBh%3B', 'tag': 'Qcac',
-                'recurrence': 'SYBU', 'status': 'US%5Cb', 'hermes_task_key': 'ZyNW',
+PROJECTS = [{'id': 'P-1', 'name': 'Admin'}, {'id': 'P-5', 'name': 'Other'}]
+CATALOG = {p['id']: {'name': p['name'], 'page_id': str(uuid.UUID(int=200+i))} for i, p in enumerate(PROJECTS)}
+COLS = s.ProjectColumns({f: 'project' if f == 'project_id' else f for f in s.FIELDS}, CATALOG)
+OBSERVED_IDS = {'name': 'title', 'start_date': '%3BBh%3B', 'project_id': 'H%3BQa',
+                'recurrence': 'SYBU', 'done': 'fixtureDone', 'hermes_task_key': 'ZyNW',
                 'priority': 'aBIM', 'due_date': 'h%5Cw%3F', 'notes': 'so%7DJ'}
 
 def row(n=1, **changes):
-    value = dict(id=f'T-1-{n}', name='Fixture work', tag='Other', status='not_started',
+    value = dict(id=f'T-1-{n}', name='Fixture work', project_id='P-5', done=False,
                  start_date='2026-05-18', due_date='2026-05-20', priority='medium',
                  recurrence=None, notes='', reminder=None, _revision=1)
     value.update(changes)
@@ -71,9 +73,12 @@ class API:
             props = {}
             for f, typ in {**s.TYPES, s.MARKER: 'rich_text'}.items():
                 props[f] = {'id': self.property_ids[f], 'type': typ, 'name': f, typ: {}}
-                if f in {'priority', 'status'}:
-                    values = s.PRIORITIES if f == 'priority' else s.STATUSES
+                if f == 'priority':
+                    values = s.PRIORITIES
                     props[f][typ] = {'options': [{'name': v, 'id': v, 'description': None} for v in sorted(values)]}
+            props['project'] = props.pop('project_id')
+            props['project']['relation'] = {'data_source_id': s.PROJECT_SOURCE, 'type': 'dual_property',
+                                              'dual_property': {'synced_property_id': 'oQv%5B'}}
             return {'object': 'data_source', 'id': s.SOURCE_ID, 'in_trash': False,
                     'parent': {'database_id': s.DB_ID}, 'properties': props}
         if path == QUERY_PATH:
@@ -98,7 +103,10 @@ class API:
                 self.before_get(pid)
             return deepcopy(self.pages[pid])
         if method == 'PATCH':
-            self.pages[pid]['properties'].update(deepcopy(body['properties']))
+            if 'in_trash' in body:
+                self.pages[pid]['in_trash'] = body['in_trash']
+            else:
+                self.pages[pid]['properties'].update(deepcopy(body['properties']))
             self.pages[pid]['last_edited_time'] += 'x'
             if self.after_patch:
                 self.after_patch(pid)
@@ -115,7 +123,14 @@ class Memory:
         self.value = None
         self.writes = 0
         self.crash = None
-    def read(self):
+    def read(self, name='two-way.json'):
+        if name == 'checkbox-schema.json':
+            return {'source_id': s.SOURCE_ID, 'done_property_id': 'fixtureDone'}
+        if name == 'projects.json':
+            import notion_projects
+            value = notion_projects.initial_state()
+            value['bindings'] = {k: {'page_id': v['page_id'], 'marker': ''} for k, v in CATALOG.items()}
+            return value
         return deepcopy(self.value)
     def write(self, value):
         s.validate_state(value)
@@ -130,6 +145,8 @@ class Canonical:
         self.receipts = {}
         self.calls = []
         self.after_commit = None
+    def read_projects(self):
+        return deepcopy(PROJECTS)
     def read(self):
         return deepcopy(self.rows)
     def edit(self, **values):
@@ -198,7 +215,7 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(self.sync(apply=True)['applied'], 1)
         payload = self.api.mutations()[-1][2]['properties']
         self.assertEqual(set(payload), {'notes', 'start_date'})
-        self.api.edit(self.pid, name='remote', tag='Admin', priority='high', due_date=None, start_date=None, status='in_progress', recurrence=None, notes='remote')
+        self.api.edit(self.pid, name='remote', project_id='P-1', priority='high', due_date=None, start_date=None, done=False, recurrence=None, notes='remote')
         self.assertEqual(self.sync(apply=True)['applied'], 1)
         self.assertEqual(self.local.rows[0]['name'], 'remote')
         self.assertIsNone(self.local.rows[0]['due_date'])
@@ -270,7 +287,7 @@ class ConnectorTests(unittest.TestCase):
         blank = page(row(), 30)
         blank['properties'] = {'name': {'title': []}, s.MARKER: {'rich_text': []}}
         self.api.pages[blank['id']] = blank
-        closed = page(row(status='completed'), 31)
+        closed = page(row(done=True), 31)
         self.api.pages[closed['id']] = closed
         sample = page(row(), 1)
         self.api.pages[sample['id']] = sample
@@ -340,25 +357,26 @@ class ConnectorTests(unittest.TestCase):
             with self.assertRaises(SyncError):
                 self.sync(apply=True)
             self.store.value = original
-        self.local.rows.append(row(2, status='completed', due_date='broken'))
+        self.local.rows.append(row(2, done=True, due_date='broken'))
         with self.assertRaises(SyncError):
             self.sync(apply=True)
     def test_richtext_chunks_clear_dates_server_metadata(self):
         value = row(notes='x' * 4001, start_date=None, due_date=None)
         p = page(value)
-        p['properties']['tag']['select']['description'] = None
+        p['properties']['priority']['select']['description'] = None
         self.assertEqual(len(p['properties']['notes']['rich_text']), 3)
         self.assertEqual(s.page_fields(p, COLS), s.fields(value))
         p['properties']['due_date']['date'] = {'start': '2026-05-20', 'end': '2026-05-21'}
         with self.assertRaises(SyncError):
             s.page_fields(p, COLS)
-    def test_closed_reopen_blocked(self):
-        self.local.rows[0]['status'] = 'completed'
-        self.api.edit(self.pid, status='completed')
+    def test_checked_reopen_allowed(self):
+        self.local.rows[0]['done'] = True
+        self.api.edit(self.pid, done=True)
         self.store = Memory()
         s.initialize(self.api, self.local, self.store, ignored=SAMPLES, apply=True)
-        self.api.edit(self.pid, status='not_started')
-        self.assertEqual(self.sync(apply=True)['conflicts'][s.key(row())], 'reopen-blocked')
+        self.api.edit(self.pid, done=False)
+        self.assertEqual(self.sync(apply=True)['applied'], 1)
+        self.assertIs(self.local.rows[0]['done'], False)
 
 class PrivateAndTransportTests(unittest.TestCase):
     def test_private_state_lock_symlink_and_corrupt_json(self):
@@ -417,6 +435,7 @@ class RealCanonicalTests(unittest.TestCase):
         tmp = self.stack.enter_context(tempfile.TemporaryDirectory())
         self.root = Path(tmp) / 'tasks'
         (self.root / '_meta').mkdir(parents=True)
+        (self.root / '_meta' / 'project_registry.json').write_text(json.dumps(PROJECTS))
         self.stack.enter_context(patch.dict(os.environ, {'TASKS_ROOT': str(self.root), 'HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS': '1', 'TASKS_DASHBOARD_AUTO_UPDATE': '0', 'TASKS_CALENDAR_AUTO_SYNC': '0'}))
         spec = importlib.util.spec_from_file_location('_notion_fixture_core', Path(__file__).with_name('task_ops.py'))
         self.ops = importlib.util.module_from_spec(spec)
@@ -451,15 +470,15 @@ class RealCanonicalTests(unittest.TestCase):
         return r
     def test_real_recurrence_completion_crash_repair_one_advance(self):
         self.seed(recurrence='weekly')
-        self.api.edit(self.pid, status='completed')
+        self.api.edit(self.pid, done=True)
         with patch.object(self.ops, 'regenerate_notes', side_effect=OSError('crash after canonical commit')):
             with self.assertRaises(OSError):
                 s.reconcile(self.api, self.core, self.store, apply=True)
         result = s.reconcile(self.api, self.core, self.store, apply=True)
         self.assertEqual(result['applied'], 1)
         r = self.core.read()[0]
-        self.assertEqual((r['due_date'], r['start_date'], r['status'], r['_revision']),
-                         ('2026-05-27', '2026-05-25', 'not_started', 2))
+        self.assertEqual((r['due_date'], r['start_date'], r['done'], r['_revision']),
+                         ('2026-05-27', '2026-05-25', False, 2))
         self.assertEqual(s.page_fields(self.api.pages[self.pid], COLS), s.fields(r))
         self.assertEqual(self.ops.LOG_PATH.read_text().count('completed occurrence'), 1)
         self.assertEqual(s.reconcile(self.api, self.core, self.store, apply=True)['planned'], 0)
@@ -508,7 +527,7 @@ class RealCanonicalTests(unittest.TestCase):
                 s.resolve_equal(self.api, self.core, self.store, **(kw | bad), apply=True)
         for f in s.FIELDS:
             original = deepcopy(self.api.pages[self.pid])
-            value = None if f in ('start_date', 'due_date') else ('monthly' if f == 'recurrence' else {'status': 'cancelled', 'priority': 'high', 'tag': 'Admin'}.get(f, 'different'))
+            value = None if f in ('start_date', 'due_date') else ('monthly' if f == 'recurrence' else {'done': True, 'priority': 'high', 'project_id': 'P-1'}.get(f, 'different'))
             self.api.edit(self.pid, **{f: value})
             with self.assertRaises(SyncError):
                 s.resolve_equal(self.api, self.core, self.store, **kw, apply=True)
@@ -557,8 +576,8 @@ class RealCanonicalTests(unittest.TestCase):
 
     def test_real_null_intake_normalizes_and_lost_ack_replays(self):
         p = page(row(start_date=None, due_date=None), 60)
-        for f in ('tag', 'priority'):
-            p['properties'][f]['select'] = None
+        p['properties']['project']['relation'] = []
+        p['properties']['priority']['select'] = None
         self.api.pages[p['id']] = p
         blank = page(row(), 61)
         blank['properties'] = {'name': {'title': []}, s.MARKER: {'rich_text': []}}
@@ -570,24 +589,24 @@ class RealCanonicalTests(unittest.TestCase):
         self.api.after_patch = None
         self.assertEqual(len(self.core.read()), 1)
         r = self.core.read()[0]
-        self.assertEqual((r['tag'], r['priority'], r['start_date'], r['due_date']), ('Other', 'medium', None, None))
+        self.assertEqual((r['project_id'], r['priority'], r['start_date'], r['due_date']), ('P-5', 'medium', None, None))
         self.assertEqual(s.page_fields(self.api.pages[p['id']], COLS), s.fields(r))
         self.assertEqual(s.marker(self.api.pages[p['id']]), s.key(r))
         self.assertEqual(s.reconcile(self.api, self.core, self.store, apply=True)['applied'], 1)
         self.assertEqual(s.reconcile(self.api, self.core, self.store, apply=True)['planned'], 0)
         self.assertEqual(len(self.core.read()), 1)
         self.assertEqual(len(self.api.mutations()), 1)
-        self.assertEqual(set(self.api.mutations()[0][2]['properties']), set(s.FIELDS) | {s.MARKER})
+        self.assertEqual(set(self.api.mutations()[0][2]['properties']), set(COLS.values()) | {s.MARKER})
         self.assertFalse(any(c[1] == '/pages/' + pid for c in self.api.calls for pid in SAMPLES))
-        for f in ('tag', 'priority'):
+        for f, typ, empty in (('project', 'relation', []), ('priority', 'select', None)):
             owned = deepcopy(self.api.pages[p['id']])
-            owned['properties'][f]['select'] = None
+            owned['properties'][f][typ] = empty
             with self.assertRaises(SyncError):
                 s.page_fields(owned, COLS)
 
     def test_real_eight_field_edit_and_clear_dates(self):
         self.seed()
-        values = dict(name='Renamed fixture', tag='Admin', status='in_progress', start_date='2026-05-19',
+        values = dict(name='Renamed fixture', project_id='P-1', done=False, start_date='2026-05-19',
                       due_date='2026-05-21', priority='high', recurrence='weekly', notes='Changed fixture')
         self.api.edit(self.pid, **values)
         self.assertEqual(s.reconcile(self.api, self.core, self.store, apply=True)['applied'], 1)

@@ -133,3 +133,81 @@ def test_cleanup_pipe_deadline_is_bounded(monkeypatch):
         wrapper.run_connector(['fixture'], timeout=110)
     assert calls == [('communicate', 110), ('killpg', Process.pid, wrapper.signal.SIGKILL),
                      ('communicate', 5), 'close', ('wait', 1)]
+
+
+def test_projects_run_after_clean_tasks_with_shared_wall_budget(monkeypatch, capsys):
+    calls = []
+    ticks = iter([100.0, 120.0])
+    monkeypatch.setattr(wrapper.time, 'monotonic', lambda: next(ticks))
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout='{"planned":0,"applied":0,"pending":0,"conflicts":{}}')
+    monkeypatch.setattr(wrapper, 'run_connector', run)
+    assert wrapper.main() == 0
+    assert len(calls) == 2
+    assert calls[0][0] == wrapper.COMMAND
+    assert calls[1][0] == wrapper.PROJECT_COMMAND
+    assert calls[1][1]['timeout'] == 90
+    assert capsys.readouterr().out == ''
+
+
+def test_project_catalog_runs_despite_task_conflict_pending_or_backlog(monkeypatch, capsys):
+    for raw in ('{"planned":0,"applied":0,"pending":0,"conflicts":{"key":"conflict"}}',
+                '{"planned":0,"applied":0,"pending":1,"conflicts":{}}',
+                '{"planned":12,"applied":10,"pending":0,"conflicts":{}}'):
+        calls = []
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            return SimpleNamespace(returncode=0, stdout=raw)
+        monkeypatch.setattr(wrapper, 'run_connector', run)
+        assert wrapper.main() == 0
+        assert calls == [wrapper.COMMAND, wrapper.PROJECT_COMMAND]
+        capsys.readouterr()
+
+
+def test_projects_failure_is_separate_safe_alert(monkeypatch, capsys):
+    results = iter([SimpleNamespace(returncode=0, stdout='{"planned":0,"applied":0,"pending":0,"conflicts":{}}'),
+                    SimpleNamespace(returncode=2, stdout='SECRET_REMOTE')])
+    monkeypatch.setattr(wrapper, 'run_connector', lambda *a, **k: next(results))
+    assert wrapper.main() == 0
+    out = capsys.readouterr().out
+    assert 'project' in out.lower() and 'SECRET_REMOTE' not in out
+
+
+def test_projects_skip_when_wall_budget_exhausted(monkeypatch, capsys):
+    ticks = iter([100.0, 205.0])
+    monkeypatch.setattr(wrapper.time, 'monotonic', lambda: next(ticks))
+    calls = []
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout='{"planned":0,"applied":0,"pending":0,"conflicts":{}}')
+    monkeypatch.setattr(wrapper, 'run_connector', run)
+    assert wrapper.main() == 0
+    assert calls == [wrapper.COMMAND]
+    assert capsys.readouterr().out == ''
+
+
+def test_project_reports_are_validated_without_leaking(monkeypatch, capsys):
+    clean = SimpleNamespace(returncode=0, stdout='{"planned":0,"applied":0,"pending":0,"conflicts":{}}')
+    for code, raw, silent in [(75, '{"busy":true}', True), (75, '{"busy":1}', False),
+                              (0, '{}', False), (0, '{"planned":0,"applied":0,"pending":0,"conflicts":{"key":"SECRET_REMOTE"}}', False)]:
+        results = iter([clean, SimpleNamespace(returncode=code, stdout=raw)])
+        monkeypatch.setattr(wrapper, 'run_connector', lambda *a, **k: next(results))
+        assert wrapper.main() == 0
+        out = capsys.readouterr().out
+        assert (out == '') is silent
+        assert 'SECRET_REMOTE' not in out
+
+
+def test_project_timeout_preserves_task_success(monkeypatch, capsys):
+    calls = []
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == wrapper.PROJECT_COMMAND:
+            raise subprocess.TimeoutExpired(cmd, kwargs['timeout'], output='SECRET_REMOTE')
+        return SimpleNamespace(returncode=0, stdout='{"planned":0,"applied":0,"pending":0,"conflicts":{}}')
+    monkeypatch.setattr(wrapper, 'run_connector', run)
+    assert wrapper.main() == 0
+    assert calls == [wrapper.COMMAND, wrapper.PROJECT_COMMAND]
+    out = capsys.readouterr().out
+    assert 'project sync needs review' in out and 'SECRET_REMOTE' not in out

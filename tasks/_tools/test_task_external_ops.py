@@ -26,7 +26,7 @@ def test_future_only_default_matrix():
     t = ops.amend_task(t['id'], name='unrelated edit')
     assert t['start_date'] is None
     full = {f: t.get(f) for f in ops.BUSINESS_FIELDS}
-    full['status'] = 'in_progress'
+    full['done'] = False
     t = ops.apply_external_change(t['id'], full, t['_revision'], 'unchanged-date-full-snapshot')
     assert t['start_date'] is None
     full = {f: t.get(f) for f in ops.BUSINESS_FIELDS}
@@ -52,11 +52,11 @@ def test_external_replay_repair(monkeypatch):
     original = ops.regenerate_notes
     monkeypatch.setattr(ops, 'regenerate_notes', lambda *a: (_ for _ in ()).throw(OSError('cache')))
     with pytest.raises(OSError):
-        ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'complete')
+        ops.apply_external_change(t['id'], {'done': True}, 1, 'complete')
     committed = ops.read_registry()[0]
     assert committed['due_date'] == '2026-05-27' and committed['start_date'] == '2026-05-25'
     monkeypatch.setattr(ops, 'regenerate_notes', original)
-    result = ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'complete')
+    result = ops.apply_external_change(t['id'], {'done': True}, 1, 'complete')
     assert result['_revision'] == 2 and result['due_date'] == '2026-05-27'
     assert ops.LOG_PATH.read_text().count('completed occurrence') == 1
     assert ops.validate_registry(ops.read_registry(), check_notes=True) == []
@@ -79,14 +79,14 @@ def test_interrupted_commit_and_repair(monkeypatch, phase):
     before = ops.REGISTRY_PATH.read_bytes()
     monkeypatch.setattr(ops, phase, fail)
     with pytest.raises(OSError):
-        ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'op')
+        ops.apply_external_change(t['id'], {'done': True}, 1, 'op')
     if phase == 'write_registry':
         assert ops.REGISTRY_PATH.read_bytes() == before
         assert not ops.LOG_PATH.exists()
     else:
         assert ops.read_registry()[0]['due_date'] == '2026-02-28'
     monkeypatch.setattr(ops, phase, original)
-    result = ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'op')
+    result = ops.apply_external_change(t['id'], {'done': True}, 1, 'op')
     assert result['due_date'] == result['start_date'] == '2026-02-28'
     assert result['_revision'] == 2
     assert ops.LOG_PATH.read_text().count('completed occurrence') == 1
@@ -102,13 +102,13 @@ def test_log_write_completed_then_raised_and_prior_flush(monkeypatch):
             raise OSError('lost acknowledgement')
     monkeypatch.setattr(ops, 'atomic_write_text', fail_after_log)
     with pytest.raises(OSError):
-        ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'first')
+        ops.apply_external_change(t['id'], {'done': True}, 1, 'first')
     monkeypatch.setattr(ops, 'atomic_write_text', original)
     # Simulate missing derived history, then publish a newer operation.
     ops.LOG_PATH.unlink()
     updated = ops.apply_external_change(t['id'], {'notes': 'new'}, 2, 'second')
     assert ops.LOG_PATH.read_text().count('completed occurrence') == 1
-    replay = ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'first')
+    replay = ops.apply_external_change(t['id'], {'done': True}, 1, 'first')
     assert replay['_revision'] == updated['_revision'] == 3
     assert replay['due_date'] == '2026-05-27'
     assert len(replay['_external_receipt']['operations']) == 2
@@ -118,8 +118,8 @@ def test_all_fields_clears_and_due_only_order():
     first = ops.add_task('first', '2026-05-25', start_date='2026-01-01')
     t = ops.add_task('second', '2026-05-20')
     assert t['id'].startswith('T-1-')
-    fields = dict(name='renamed', status='in_progress', start_date='2026-05-18',
-                  due_date='2026-05-21', priority='high', tag='School', notes='edited', recurrence='daily')
+    fields = dict(name='renamed', done=False, start_date='2026-05-18',
+                  due_date='2026-05-21', priority='high', project_id='P-7', notes='edited', recurrence='daily')
     t = ops.apply_external_change(t['id'], fields, 1, 'all')
     assert all(t[k] == v for k, v in fields.items())
     assert t['reminder'] == '2026-05-20'
@@ -129,20 +129,22 @@ def test_all_fields_clears_and_due_only_order():
     assert ops.apply_external_change(t['id'], {}, 3, 'noop')['_revision'] == 3
 
 
-@pytest.mark.parametrize('status', ['completed', 'cancelled'])
-def test_terminal_and_no_reopen(status):
-    t = ops.add_task('one')
-    t = ops.apply_external_change(t['id'], {'status': status}, 1, 'close')
-    assert t['status'] == status and t['_revision'] == 2
-    with pytest.raises(ValueError):
-        ops.apply_external_change(t['id'], {'status': 'not_started'}, 2, 'reopen')
-    assert ops.apply_external_change(t['id'], {'status': status}, 2, 'noop')['_revision'] == 2
+def test_checkbox_completion_and_deliberate_reopen():
+    t = ops.add_task('one', '2026-05-20')
+    t = ops.apply_external_change(t['id'], {'done': True}, 1, 'close')
+    assert t['done'] is True and t['_revision'] == 2
+    assert ops.apply_external_change(t['id'], {'done': True}, 2, 'noop')['_revision'] == 2
+    t = ops.apply_external_change(t['id'], {'done': False}, 2, 'reopen')
+    assert t['done'] is False and t['_revision'] == 3
+    assert ops.task_note_path(t).exists()
+    assert ops.apply_external_change(t['id'], {'done': True}, 1, 'close')['done'] is False
+    assert ops.LOG_PATH.read_text().count('— completed') == 1
 
 
 @pytest.mark.parametrize('bad', [True, -1, 1.0, None, '0'])
 def test_strict_revision_even_closed(bad):
     t = ops.add_task('one')
-    t['status'] = 'completed'
+    t['done'] = True
     t['_revision'] = bad
     ops.write_registry([t])
     with pytest.raises(ValueError):
@@ -189,7 +191,7 @@ def test_atomic_rename_failure_and_lost_commit_ack(monkeypatch):
         raise OSError('before rename')
     monkeypatch.setattr(ops.os, 'replace', deny)
     with pytest.raises(OSError):
-        ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'rename')
+        ops.apply_external_change(t['id'], {'done': True}, 1, 'rename')
     assert ops.REGISTRY_PATH.read_bytes() == before
     monkeypatch.setattr(ops.os, 'replace', replace)
     write = ops.write_registry
@@ -198,9 +200,9 @@ def test_atomic_rename_failure_and_lost_commit_ack(monkeypatch):
         raise OSError('after durable registry publication')
     monkeypatch.setattr(ops, 'write_registry', lost_ack)
     with pytest.raises(OSError):
-        ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'rename')
+        ops.apply_external_change(t['id'], {'done': True}, 1, 'rename')
     monkeypatch.setattr(ops, 'write_registry', write)
-    t = ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'rename')
+    t = ops.apply_external_change(t['id'], {'done': True}, 1, 'rename')
     assert t['due_date'] == '2026-05-27' and t['_revision'] == 2
     assert ops.LOG_PATH.read_text().count('completed occurrence') == 1
 
@@ -229,7 +231,7 @@ def test_registry_parent_fsync_failure_replay_and_current_state(monkeypatch):
         monkeypatch.setattr(ops, name, pytest.fail)
     for expected_attempts in (1, 2, 3):
         with pytest.raises(OSError, match='canonical parent fsync failed'):
-            ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'dir-fsync')
+            ops.apply_external_change(t['id'], {'done': True}, 1, 'dir-fsync')
         assert attempts == expected_attempts
         current = ops.read_registry()[0]
         assert current['_revision'] == 2
@@ -250,19 +252,19 @@ def test_registry_parent_fsync_failure_replay_and_current_state(monkeypatch):
     # Even after later edits, another failed replay must not restore old state.
     failing = True
     with pytest.raises(OSError, match='canonical parent fsync failed'):
-        ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'dir-fsync')
+        ops.apply_external_change(t['id'], {'done': True}, 1, 'dir-fsync')
     assert ops.REGISTRY_PATH.read_bytes() == before_replay
     assert not ops.LOG_PATH.exists()
     failing = False
     attempts_before_replay = attempts
-    result = ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'dir-fsync')
+    result = ops.apply_external_change(t['id'], {'done': True}, 1, 'dir-fsync')
     assert attempts > attempts_before_replay
     assert result == later
     assert result['_revision'] == 3 and result['notes'] == 'later local edit'
     assert ops.REGISTRY_PATH.read_bytes() == before_replay
     assert ops.LOG_PATH.read_text().count('completed occurrence') == 1
     assert not ops.validate_registry(ops.read_registry(), check_notes=True)
-    assert ops.apply_external_change(t['id'], {'status': 'completed'}, 1, 'dir-fsync') == result
+    assert ops.apply_external_change(t['id'], {'done': True}, 1, 'dir-fsync') == result
     assert ops.LOG_PATH.read_text().count('completed occurrence') == 1
 
 
@@ -314,7 +316,7 @@ def test_revision_read_is_under_lock(monkeypatch):
                                    {'_external_receipt': {'operations': {'x': {'payload_hash': '0'*64, 'log_entry': '', 'cleanup_id': None}}}}])
 def test_malformed_closed_record_blocks_replay(corrupt):
     t = ops.apply_external_change(None, {'name': 'one'}, None, 'new', 'page')
-    t['status'] = 'completed'
+    t['done'] = True
     t.update(corrupt)
     ops.write_registry([t])
     before = ops.REGISTRY_PATH.read_bytes()

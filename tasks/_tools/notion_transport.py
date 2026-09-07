@@ -147,7 +147,8 @@ class Client:
                 (method == 'POST' and path in {QUERY_PATH, '/pages'}) or
                 (method == 'PATCH' and page), 'endpoint-not-allowed')
         if method == 'PATCH':
-            require(isinstance(body, dict) and set(body) == {'properties'}, 'patch-properties-only')
+            require(isinstance(body, dict) and (set(body) == {'properties'} or
+                    set(body) == {'in_trash'} and body['in_trash'] is True), 'patch-properties-only')
         if method == 'POST' and path == '/pages':
             require(isinstance(body, dict) and set(body) == {'parent', 'properties', 'template'} and
                     body['parent'] == {'type': 'data_source_id', 'data_source_id': SOURCE_ID} and

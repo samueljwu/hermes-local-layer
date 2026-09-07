@@ -302,15 +302,17 @@ def parse_completed_log(text: str, start: date, end: date) -> list[dict]:
     return records
 
 
-def build_completion_records(log_text: str, registry: list[dict], start: date, end: date) -> list[dict]:
-    """Build report rows, preserving the completion date recorded in the log."""
+def build_completion_records(log_text: str, registry: list[dict], start: date, end: date, projects=None) -> list[dict]:
+    """Build report rows, preserving historical log text and output column names."""
+    from discord_tag_commands import join_projects
+    registry = join_projects(registry, REGISTRY.parents[1], projects)
     by_creation = {creation_number(task["id"]): task for task in registry}
     records = parse_completed_log(log_text, start, end)
     for record in records:
         source = by_creation.get(creation_number(record["id"]))
         if source is None:
             raise RuntimeError(f"No canonical registry record for {record['id']}")
-        record["tag"] = source["tag"]
+        record["tag"] = source["project_name"]
         record["notes"] = source.get("notes", "")
     return records
 

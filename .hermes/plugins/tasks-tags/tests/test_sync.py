@@ -71,6 +71,7 @@ class SyncTests(unittest.TestCase):
         self.registry = self.home / "tasks" / "_meta" / "task_registry.json"
         self.registry.parent.mkdir(parents=True)
         self.registry.write_text("[]")
+        self.registry.with_name("project_registry.json").write_text("[]")
         env = patch.dict(os.environ, {"HERMES_HOME": str(self.home), "HOME": str(self.home),
                                      "TASKS_ROOT": str(self.home / "tasks"),
                                      "HERMES_ALLOW_NONCANONICAL_LOCAL_ROOTS": "1"}, clear=True)
@@ -91,6 +92,14 @@ class SyncTests(unittest.TestCase):
         network = patch.object(self.sync, "discord_request", self.rest)
         network.start()
         self.addCleanup(network.stop)
+
+    def write_tasks(self, names, *, title="fixture", done=False):
+        projects = [{"id": f"P-{i}", "name": name} for i, name in enumerate(names, 1)]
+        rows = [dict(id=f"T-{i}-{i}", name=title, done=done, project_id=p["id"],
+                     due_date=None, reminder=None, recurrence=None, priority="medium", notes="")
+                for i, p in enumerate(projects, 1)]
+        self.registry.with_name("project_registry.json").write_text(json.dumps(projects))
+        self.registry.write_text(json.dumps(rows))
 
     def reconcile(self, tags, **kwargs):
         return self.sync.reconcile("fixture-token", tags, app_id="123", **kwargs)
@@ -120,15 +129,21 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(self.rest.writes, [])
 
     def test_live_rejects_only_invalid_tags_and_receipt_failure_is_nonfatal(self):
-        self.registry.write_text(json.dumps([{"tag": tag} for tag in
-            ["Good", "R&D", "help", "New Project", "New-Project"]]))
+        self.write_tasks(["Good", "R&D", "help", "New Project", "New-Project"])
         live = self.plugin.LiveTags(self.ctx)
-        mapping = live.refresh_handlers(dispatch_aliases=False)
+        # Canonical ingestion now rejects catalog path collisions outright.
+        with self.assertRaisesRegex(ValueError, "project slug collision"):
+            live.refresh_handlers(dispatch_aliases=False)
+        self.assertEqual(self.rest.writes, [])
+        # Exercise the handler layer's independent per-command isolation too.
+        names = ["Good", "R&D", "help", "New Project", "New-Project"]
+        with patch.object(self.plugin, "_read_registry", return_value=[{"project_name": name} for name in names]):
+            mapping = live.refresh_handlers(dispatch_aliases=False)
         self.assertEqual(mapping, {"good": "Good"})
         self.assertEqual(set(live.tag_errors), {"r&d", "help", "new_project"})
         with patch.object(live, "_write_receipt", side_effect=OSError("disk full")):
             live.receipt(mapping)  # must not propagate and terminate the watcher
-        self.registry.write_text(json.dumps([{"tag": "New Project"}]))
+        self.write_tasks(["New Project"])
         from hermes_cli.plugins import get_plugin_command_handler
         live.refresh_handlers(dispatch_aliases=False)
         self.assertIsNone(get_plugin_command_handler("new-project"))
@@ -184,7 +199,7 @@ class SyncTests(unittest.TestCase):
             live = self.plugin.LiveTags(self.ctx)
             live.refresh_native(native, adapter, live.refresh_handlers())
             self.assertIsNone(native.tree.get_command("new_project"))
-            self.registry.write_text(json.dumps([{"id": "T-1-1", "tag": "New Project", "status": "not_started", "name": "fixture task"}]))
+            self.write_tasks(["New Project"], title="fixture task")
             mapping = live.refresh_handlers()
             live.refresh_native(native, adapter, mapping)
             command = native.tree.get_command("new_project")
@@ -211,7 +226,7 @@ class SyncTests(unittest.TestCase):
                 nonlocal ticks
                 ticks += 1
                 if ticks == 1:
-                    self.registry.write_text(json.dumps([{"tag": "New Project", "status": "not_started", "name": "added after boot"}]))
+                    self.write_tasks(["New Project"], title="added after boot")
                 elif ticks == 2:
                     self.rest.commands.clear()  # remote deletion / core sync drift
                     live.last_remote = float("-inf")
@@ -252,7 +267,7 @@ class SyncTests(unittest.TestCase):
 
     def test_watcher_lifecycle_receipt_and_long_rate_cooldown(self):
         async def scenario():
-            self.registry.write_text(json.dumps([{"tag": "School", "status": "not_started", "name": "fixture"}]))
+            self.write_tasks(["School"])
             import discord
             from discord.ext import commands
             native = commands.Bot(command_prefix="!", intents=discord.Intents.none())

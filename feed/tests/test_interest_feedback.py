@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -13,7 +14,7 @@ def load_feed_ops():
 
 
 def load_feed_plugin():
-    path = Path("/home/hermes/.hermes/plugins/feed-feedback/__init__.py")
+    path = Path(__file__).resolve().parents[2] / ".hermes/plugins/feed-feedback/__init__.py"
     spec = importlib.util.spec_from_file_location("feed_feedback_plugin_under_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -108,7 +109,9 @@ class FeedInterestFeedbackTests(unittest.TestCase):
 
             feed_ops.load_json = fake_load_json
 
-            signals = feed_ops.collect_signals()["signals"]
+            from task_schema import load_project_registry
+            with patch('task_schema.load_project_registry', return_value=[]):
+                signals = feed_ops.collect_signals()["signals"]
 
             feedback_signals = [s for s in signals if s.get("source_system") == "feed" and s.get("kind") == "promoted_exploratory"]
             self.assertEqual(len(feedback_signals), 1)

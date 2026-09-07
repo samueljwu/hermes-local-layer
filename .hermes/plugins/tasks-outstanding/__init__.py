@@ -17,8 +17,9 @@ import sys
 LOCAL_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 if str(LOCAL_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(LOCAL_SCRIPTS))
-from task_schema import is_open, OPEN_STATUSES, VALID_STATUSES
-from local_ops import resolve_tasks_root  # noqa: E402
+from task_schema import is_open
+from discord_tag_commands import join_projects
+from local_ops import resolve_tasks_root, tasks_lock  # noqa: E402
 
 REGISTRY_PATH = resolve_tasks_root() / "_meta" / "task_registry.json"
 LOCAL_TZ = ZoneInfo("Asia/Hong_Kong")
@@ -64,10 +65,9 @@ def _format_due(value: str | None) -> str:
 def _read_registry() -> list[dict]:
     if not REGISTRY_PATH.exists():
         return []
-    data = json.loads(REGISTRY_PATH.read_text())
-    if not isinstance(data, list):
-        raise ValueError("Task registry must be a flat JSON array, not an object")
-    return data
+    with tasks_lock(REGISTRY_PATH.parents[1]):
+        data = json.loads(REGISTRY_PATH.read_text())
+        return join_projects(data, REGISTRY_PATH.parents[1])
 
 
 def _sort_key(task: dict) -> tuple[datetime, int, str]:
@@ -88,7 +88,7 @@ def _handle_outstanding(raw_args: str = "") -> str:
     lines: list[str] = []
     for t in sorted(tasks, key=_sort_key):
         due = _format_due(t.get("due_date"))
-        tag = str(t.get("tag") or "Other").strip()
+        tag = str(t.get("project_name") or "Other").strip()
         desc = str(t.get("name", "")).strip().rstrip(".")
         priority = str(t.get("priority", "medium")).lower()
         high = " - High" if priority in {"high", "top", "urgent"} else ""

@@ -9,14 +9,14 @@ plugin = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plugin)
 
 def test_four_states_name_only_sort_and_priority():
-    rows = [dict(id=f'T-{i}-{i}', name=f'Fixture {status}.', status=status, tag='Research',
+    rows = [dict(id=f'T-{i}-{i}', name=f'Fixture {i}.', done=done, project_id='P-1', project_name='Research',
                  priority='high', due_date='2026-01-01')
-            for i, status in enumerate(('not_started', 'in_progress', 'completed', 'cancelled'), 1)]
+            for i, done in enumerate((False, False, True, True), 1)]
     with patch.object(plugin, '_read_registry', return_value=list(reversed(rows))):
         text = plugin._handle_outstanding('ignored')
     assert text.splitlines() == [
-        'T-1-1 - Thu Jan 1 - Research - Fixture not_started - High',
-        'T-2-2 - Thu Jan 1 - Research - Fixture in_progress - High']
+        'T-1-1 - Thu Jan 1 - Research - Fixture 1 - High',
+        'T-2-2 - Thu Jan 1 - Research - Fixture 2 - High']
 
 @pytest.mark.parametrize('row', [{'name': 'missing'}, {'name': 'bad', 'status': 'pending'}])
 def test_invalid_status_raises(row):

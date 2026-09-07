@@ -1,28 +1,71 @@
-"""Shared canonical task vocabulary; no I/O, migration, or runtime paths."""
+"""Shared canonical task and project vocabulary; explicit, uncached reads."""
+import json
+from pathlib import Path
+
+
 from collections.abc import Mapping
 import re
 from typing import Any
 
+PROJECT_ID_RE = re.compile(r'^P-[1-9][0-9]*$')
+
+def validate_project_registry(projects: list) -> None:
+    """Validate the minimal registry, including unique exact names and IDs."""
+    if not isinstance(projects, list):
+        raise ValueError('project registry must be a flat JSON array')
+    ids, names = set(), set()
+    for project in projects:
+        if not isinstance(project, dict) or set(project) != {'id', 'name'}:
+            raise ValueError('project records require only id and name')
+        pid, name = project['id'], project['name']
+        if not isinstance(pid, str) or not PROJECT_ID_RE.fullmatch(pid):
+            raise ValueError('invalid project id; expected positive P-N')
+        if not isinstance(name, str) or not name.strip() or name != name.strip():
+            raise ValueError('project name must be a nonblank trimmed string')
+        if pid in ids or name in names:
+            raise ValueError('duplicate project id or name')
+        ids.add(pid)
+        names.add(name)
+
+
+def load_project_registry(root: Path) -> list:
+    """Load root/_meta/project_registry.json; missing/corrupt data fails closed."""
+    projects = json.loads((Path(root) / '_meta' / 'project_registry.json').read_text(encoding='utf-8'))
+    validate_project_registry(projects)
+    return projects
+
+
+def project_name(task: Mapping[str, Any], projects: list) -> str:
+    """Resolve one task's foreign key from an already validated snapshot."""
+    pid = task.get('project_id')
+    if not isinstance(pid, str) or not PROJECT_ID_RE.fullmatch(pid):
+        raise ValueError('invalid project_id; expected positive P-N')
+    for project in projects:
+        if project['id'] == pid:
+            return project['name']
+    raise ValueError(f'unknown project_id {pid}')
+
+
 OPEN_STATUSES = frozenset({'not_started', 'in_progress'})
 VALID_STATUSES = OPEN_STATUSES | {'completed', 'cancelled'}
-REQUIRED_FIELDS = ('id', 'name', 'due_date', 'recurrence', 'priority', 'tag', 'status', 'notes', 'reminder')
+REQUIRED_FIELDS = ('id', 'name', 'due_date', 'recurrence', 'priority', 'project_id', 'done', 'notes', 'reminder')
 TASK_ID_RE = re.compile(r"^T(?:-(?P<rank>[1-9][0-9]*)-(?P<created>[1-9][0-9]*)|(?P<legacy>[1-9][0-9]*))$")
 
 
 def is_open(task: Mapping[str, Any]) -> bool:
-    """Classify status strictly; never silently treat corrupt records as closed.
+    """Classify a strict checkbox projection, rejecting stored legacy status.
 
-    Status-only projections are allowed. Legacy/mixed title fields are not.
     Full registry shape validation belongs at the registry boundary.
     """
     if not isinstance(task, Mapping):
         raise ValueError('task must be an object')
     if 'task' in task:
         raise ValueError('forbidden legacy task field; use name')
-    status = task.get('status')
-    if not isinstance(status, str) or status not in VALID_STATUSES:
-        raise ValueError(f'unexpected status {status}; explicit canonical status required')
-    return status in OPEN_STATUSES
+    if 'status' in task:
+        raise ValueError('forbidden stored status; use done')
+    if type(task.get('done')) is not bool:
+        raise ValueError('done must be a boolean')
+    return not task['done']
 
 
 def validate_task_shape(task: Mapping[str, Any]) -> None:
@@ -32,10 +75,15 @@ def validate_task_shape(task: Mapping[str, Any]) -> None:
     callers may still supply supported human-readable dates for normalization.
     """
     is_open(task)
+    for legacy in ('tag', 'project', 'project_name', 'category'):
+        if legacy in task:
+            raise ValueError(f'forbidden stored {legacy} field; use project_id')
     for field in REQUIRED_FIELDS:
         if field not in task:
             raise ValueError(f'missing field {field}')
         value = task[field]
+        if field == 'done':
+            continue  # strict boolean checked by is_open
         nullable = field in {'due_date', 'recurrence', 'reminder'}
         if not isinstance(value, str) and not (nullable and value is None):
             suffix = ' or null' if nullable else ''
@@ -65,6 +113,8 @@ def validate_task_shape(task: Mapping[str, Any]) -> None:
                     raise ValueError('invalid external log event')
             if event['cleanup_id'] is not None and (not isinstance(event['cleanup_id'], str) or not TASK_ID_RE.fullmatch(event['cleanup_id'])):
                 raise ValueError('invalid external cleanup identity')
+    if not PROJECT_ID_RE.fullmatch(task['project_id']):
+        raise ValueError('invalid project_id; expected positive P-N')
     if not task['name'].strip():
         raise ValueError('name must be a non-empty string')
     if not TASK_ID_RE.fullmatch(task['id']):

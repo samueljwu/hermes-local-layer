@@ -122,12 +122,13 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
             self.assertFalse((outside / "locks" / "report.lock").exists())
 
     def test_occurrence_log_survives_current_name_status_and_rank_changes(self):
-        registry = [{"id": "T-9-1", "name": "Current recurring name", "status": "not_started",
-                     "tag": "Recurring", "notes": "Canonical recurring notes"}]
+        registry = [{"id": "T-1-1", "name": "Current recurring name", "done": False,
+                     "project_id": "P-1", "notes": "Canonical recurring notes",
+                     "due_date": None, "reminder": None, "recurrence": None, "priority": "medium"}]
         records = report.build_completion_records(
-            "## 2026-01-03\n- **T-1-1** — Historical recurring title — completed occurrence\n",
-            registry, date(2026, 1, 1), date(2026, 1, 4))
-        self.assertEqual(records, [{"id": "T-1-1", "task": "Historical recurring title",
+            "## 2026-01-03\n- **T-9-1** — Historical recurring title — completed occurrence\n",
+            registry, date(2026, 1, 1), date(2026, 1, 4), projects=[{"id": "P-1", "name": "Recurring"}])
+        self.assertEqual(records, [{"id": "T-9-1", "task": "Historical recurring title",
                                    "status": "completed occurrence", "date": date(2026, 1, 3),
                                    "tag": "Recurring", "notes": "Canonical recurring notes"}])
 
@@ -135,9 +136,9 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
         registry = [{
             "id": "T-1-1",
             "name": "Renamed current task",
-            "status": "in_progress",
+            "done": False,
             "due_date": "2026-01-01",
-            "tag": "Other",
+            "project_id": "P-2", "reminder": "2025-12-31", "recurrence": None, "priority": "medium",
             "notes": "Canonical notes",
         }]
         log_text = """# Task Log
@@ -152,6 +153,7 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
             registry,
             date(2025, 12, 29),
             date(2026, 1, 4),
+            projects=[{"id": "P-2", "name": "Other"}],
         )
 
         self.assertEqual(len(records), 1)

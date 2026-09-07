@@ -56,6 +56,7 @@ class DashboardRotationTests(unittest.TestCase):
             registry = Path(tmp) / "tasks" / "_meta" / "task_registry.json"
             registry.parent.mkdir(parents=True)
             registry.write_text("[]", encoding="utf-8")
+            registry.with_name("project_registry.json").write_text("[]", encoding="utf-8")
             with mock.patch.object(updater, "REGISTRY_PATH", registry), mock.patch.object(updater, "ENV_PATH", Path(tmp) / ".env"), mock.patch.dict(updater.os.environ, {"DISCORD_BOT_TOKEN": "token"}), mock.patch.object(updater, "tasks_lock", side_effect=lambda root: Lock()) as lock, mock.patch.object(updater, "update_dashboard", side_effect=lambda *_: (events.append("refresh") or ("123", False))):
                 self.assertEqual(updater.main(), 0)
 

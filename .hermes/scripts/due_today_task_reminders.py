@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-LOCAL_SCRIPTS = Path("/home/hermes/.hermes/scripts")
+LOCAL_SCRIPTS = Path(__file__).resolve().parent
 if str(LOCAL_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(LOCAL_SCRIPTS))
 from local_ops import resolve_tasks_root  # noqa: E402
