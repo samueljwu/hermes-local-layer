@@ -34,11 +34,13 @@ class CheckboxTests(unittest.TestCase):
                       {'source_id': 'wrong', 'done_property_id': 'new'},
                       {'source_id': s.SOURCE_ID, 'done_property_id': 'title'}):
             with self.assertRaises(SyncError):
-                s.schema(api, f.CATALOG, mapping=value)
+                s.schema(api, f.CATALOG, mapping=value,
+                         est_mapping={'source_id': s.SOURCE_ID, 'est_time_property_id': 'fixtureEst'})
         for actual in ('new%3Aid', 'second'):
             api.property_ids['done'] = actual
             mapping = {'source_id': s.SOURCE_ID, 'done_property_id': actual}
-            self.assertEqual(s.schema(api, f.CATALOG, mapping=mapping)['done'], 'done')
+            self.assertEqual(s.schema(api, f.CATALOG, mapping=mapping,
+                est_mapping={'source_id': s.SOURCE_ID, 'est_time_property_id': 'fixtureEst'})['done'], 'done')
         self.assertNotIn('done', s.PROPERTY_IDS)
         self.assertFalse(api.mutations())
 

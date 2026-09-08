@@ -18,6 +18,8 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
             "latest_report_tasks.csv": "task_id\n",
             "weekly_completed_tasks_last_10_weeks.svg": "<svg/>\n",
             "weekly_completed_tasks_last_10_weeks.png": b"PNG",
+            "weekly_completed_estimated_hours_last_10_weeks.svg": "<svg/>\n",
+            "weekly_completed_estimated_hours_last_10_weeks.png": b"PNG",
         }
 
     def test_failed_generation_switch_preserves_complete_previous_bundle(self) -> None:
@@ -33,6 +35,8 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
                 "latest_report_tasks.csv": "new csv\n",
                 "weekly_completed_tasks_last_10_weeks.svg": "new svg\n",
                 "weekly_completed_tasks_last_10_weeks.png": b"new png",
+                "weekly_completed_estimated_hours_last_10_weeks.svg": "new hours svg\n",
+                "weekly_completed_estimated_hours_last_10_weeks.png": b"new hours png",
             }
 
             with mock.patch.object(report, "OUT", out), mock.patch.object(report, "LOCK", lock), mock.patch.object(
@@ -68,6 +72,30 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
                 self.assertTrue(path.is_symlink())
                 self.assertEqual(os.readlink(path), f"{report.CURRENT_LINK_NAME}/{name}")
 
+    def test_publish_upgrades_existing_four_artifact_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "task-completion-report"
+            out.mkdir()
+            lock = root / "report.lock"
+            for name in report.LEGACY_OUTPUT_NAMES:
+                (out / name).write_bytes(f"old:{name}".encode())
+
+            with mock.patch.object(report, "OUT", out), mock.patch.object(report, "LOCK", lock), mock.patch.object(
+                report, "ensure_output_root", side_effect=lambda: None
+            ):
+                report.publish_report_files(self.payloads())
+
+            payloads = self.payloads()
+            for name in report.OUTPUT_NAMES:
+                path = out / name
+                expected = payloads[name]
+                if isinstance(expected, str):
+                    expected = expected.encode()
+                self.assertTrue(path.is_symlink())
+                self.assertEqual(os.readlink(path), f"{report.CURRENT_LINK_NAME}/{name}")
+                self.assertEqual(path.read_bytes(), expected)
+
     def test_publish_stages_complete_bundle_and_rejects_symlinked_lock(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -82,6 +110,8 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
                 "latest_report_tasks.csv": "task_id\n",
                 "weekly_completed_tasks_last_10_weeks.svg": "<svg/>\n",
                 "weekly_completed_tasks_last_10_weeks.png": b"PNG",
+                "weekly_completed_estimated_hours_last_10_weeks.svg": "<svg/>\n",
+                "weekly_completed_estimated_hours_last_10_weeks.png": b"PNG",
             }
 
             with mock.patch.object(report, "OUT", out), mock.patch.object(report, "LOCK", lock), mock.patch.object(
@@ -130,7 +160,26 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
             registry, date(2026, 1, 1), date(2026, 1, 4), projects=[{"id": "P-1", "name": "Recurring"}])
         self.assertEqual(records, [{"id": "T-9-1", "task": "Historical recurring title",
                                    "status": "completed occurrence", "date": date(2026, 1, 3),
-                                   "tag": "Recurring", "notes": "Canonical recurring notes"}])
+                                   "tag": "Recurring", "notes": "Canonical recurring notes",
+                                   "est_time": 1}])
+
+    def test_completion_records_use_est_time_and_default_null_or_missing_to_one_hour(self):
+        base = {"name": "Task", "done": True, "project_id": "P-1", "notes": "",
+                "due_date": None, "reminder": None, "recurrence": None, "priority": "medium"}
+        registry = [
+            {**base, "id": "T-1-1", "est_time": 2},
+            {**base, "id": "T-2-2", "est_time": None},
+            {**base, "id": "T-3-3"},
+            {**base, "id": "T-4-4", "est_time": 0.5},
+        ]
+        log_text = "## 2026-01-03\n" + "\n".join(
+            f"- **T-{i}-{i}** — Task {i} — completed" for i in range(1, 5)
+        )
+        records = report.build_completion_records(
+            log_text, registry, date(2026, 1, 1), date(2026, 1, 4),
+            projects=[{"id": "P-1", "name": "Admin"}],
+        )
+        self.assertEqual([row["est_time"] for row in records], [2, 1, 1, 0.5])
 
     def test_completion_date_not_due_date_drives_report_day_and_week(self) -> None:
         registry = [{
@@ -165,6 +214,56 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
         self.assertEqual(records[0]["date"], date(2026, 1, 3))
         self.assertEqual(report.completion_week_start(records[0]["date"]), date(2025, 12, 29))
         self.assertNotEqual(records[0]["date"], date.fromisoformat(registry[0]["due_date"]))
+
+    def test_completed_task_remains_reportable_after_cancellation_archive(self) -> None:
+        snapshot = {
+            "id": "T-4-9", "name": "Archived task", "done": True,
+            "project_id": "P-2", "notes": "Archived notes", "due_date": None,
+            "reminder": None, "recurrence": None, "priority": "medium",
+        }
+        records = report.build_completion_records(
+            "## 2026-01-03\n- **T-1-9** — Historical title — completed\n",
+            [], date(2026, 1, 1), date(2026, 1, 4),
+            projects=[{"id": "P-2", "name": "Admin"}],
+            deletions={"9": {"task_id": "T-4-9", "snapshot": snapshot}},
+        )
+        self.assertEqual(records[0]["tag"], "Admin")
+        self.assertEqual(records[0]["notes"], "Archived notes")
+
+    def test_legacy_migration_archive_can_supply_historical_project(self) -> None:
+        snapshot = {"id": "T-8-12", "name": "Old task", "status": "cancelled",
+                    "tag": "Legacy project", "notes": "Old notes"}
+        records = report.build_completion_records(
+            "## 2026-01-03\n- **T-2-12** — Earlier occurrence — completed occurrence\n",
+            [], date(2026, 1, 1), date(2026, 1, 4), projects=[],
+            deletions={"12": {"task_id": "T-8-12", "snapshot": snapshot}},
+        )
+        self.assertEqual((records[0]["tag"], records[0]["notes"]),
+                         ("Legacy project", "Old notes"))
+
+    def test_archive_identity_collision_fails_closed(self) -> None:
+        active = {"id": "T-1-9", "name": "Active", "done": False,
+                  "project_id": "P-2", "notes": "", "due_date": None,
+                  "reminder": None, "recurrence": None, "priority": "medium"}
+        with self.assertRaisesRegex(RuntimeError, "registry and deletion ledger"):
+            report.build_completion_records(
+                "", [active], date(2026, 1, 1), date(2026, 1, 4),
+                projects=[{"id": "P-2", "name": "Admin"}],
+                deletions={"9": {"task_id": "T-1-9", "snapshot": dict(active)}},
+            )
+
+    def test_invalid_archived_estimate_fails_closed(self) -> None:
+        snapshot = {"id": "T-1-9", "name": "Archived", "done": True,
+                    "project_id": "P-2", "notes": "", "due_date": None,
+                    "reminder": None, "recurrence": None, "priority": "medium",
+                    "est_time": "two"}
+        with self.assertRaisesRegex(RuntimeError, "Invalid archived task estimate"):
+            report.build_completion_records(
+                "## 2026-01-03\n- **T-1-9** — Archived — completed\n",
+                [], date(2026, 1, 1), date(2026, 1, 4),
+                projects=[{"id": "P-2", "name": "Admin"}],
+                deletions={"9": {"task_id": "T-1-9", "snapshot": snapshot}},
+            )
 
 
 if __name__ == "__main__":

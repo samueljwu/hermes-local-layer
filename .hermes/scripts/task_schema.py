@@ -1,5 +1,6 @@
 """Shared canonical task and project vocabulary; explicit, uncached reads."""
 import json
+import math
 from pathlib import Path
 
 
@@ -8,6 +9,19 @@ import re
 from typing import Any
 
 PROJECT_ID_RE = re.compile(r'^P-[1-9][0-9]*$')
+MAX_EST_TIME_HOURS = 9_007_199_254_740_991
+
+
+def validate_est_time(value: Any) -> None:
+    """Validate a Notion/JSON-safe optional numeric estimate in hours."""
+    if value is None:
+        return
+    if (type(value) not in {int, float} or
+            (type(value) is float and not math.isfinite(value)) or
+            value < 0 or value > MAX_EST_TIME_HOURS):
+        raise ValueError(
+            f'est_time must be a nonnegative finite number of hours no greater than '
+            f'{MAX_EST_TIME_HOURS}, or null')
 
 def validate_project_registry(projects: list) -> None:
     """Validate the minimal registry, including unique exact names and IDs."""
@@ -90,6 +104,7 @@ def validate_task_shape(task: Mapping[str, Any]) -> None:
             raise ValueError(f'{field} must be a string{suffix}')
     if task.get('start_date') is not None and not isinstance(task['start_date'], str):
         raise ValueError('start_date must be a string or null')
+    validate_est_time(task.get('est_time'))
     revision = task.get('_revision', 0)
     if type(revision) is not int or revision < 0:
         raise ValueError('_revision must be a nonnegative integer')

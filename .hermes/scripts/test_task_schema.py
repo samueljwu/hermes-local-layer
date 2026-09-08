@@ -24,6 +24,23 @@ def test_shape_allows_nullable_strings_and_input_date_normalization():
     validate_task_shape(task)
 
 
+@pytest.mark.parametrize('value', [True, False, -1, 10**400, float('inf'), float('-inf'), float('nan'), '1', []])
+def test_est_time_rejects_non_numeric_negative_or_nonfinite_values(value):
+    task = dict(id='T-1-1', name='Task', due_date=None, recurrence=None,
+                priority='medium', project_id='P-5', done=False, notes='', reminder=None,
+                est_time=value)
+    with pytest.raises(ValueError, match='est_time'):
+        validate_task_shape(task)
+
+
+@pytest.mark.parametrize('value', [None, 0, 0.5, 2])
+def test_est_time_accepts_optional_nonnegative_hours(value):
+    task = dict(id='T-1-1', name='Task', due_date=None, recurrence=None,
+                priority='medium', project_id='P-5', done=False, notes='', reminder=None,
+                est_time=value)
+    validate_task_shape(task)
+
+
 @pytest.mark.parametrize('identity', ['T-1-0', 'T-0-1', 'T0', 'T-01-1', 'T-1-01'])
 def test_shape_rejects_nonpositive_or_noncanonical_identity(identity):
     task = dict(id=identity, name='Task', due_date=None, recurrence=None,

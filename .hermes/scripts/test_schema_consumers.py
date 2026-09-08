@@ -102,7 +102,7 @@ def test_tags_single_tag_open_count_and_all_record_registration(rows):
     assert all('open tasks' in entry['description'] for entry in registered.values())
     assert 'Name' not in tags._render_tag(joined(rows), 'Res')
 
-@pytest.mark.parametrize('description', ["Show all pending tasks tagged 'Research'", "Show pending tasks for the Research tag.", "Show all open tasks tagged 'Research'", "Show open tasks for the Research tag."])
+@pytest.mark.parametrize('description', ["Show all pending tasks tagged 'Research'", "Show pending tasks for the Research tag.", "Show all open tasks tagged 'Research'", "Show open tasks for the Research tag.", "Show all open tasks in project 'Research'"])
 def test_exact_old_new_command_ownership(description):
     sync = load('schema_sync', SCRIPTS / 'discord_tag_commands.py')
     assert sync._owned(dict(name='research', type=1, description=description))
@@ -131,7 +131,7 @@ def test_remote_legacy_description_refresh_and_readback(tmp_path):
         assert sync.reconcile('fixture', {'Research'}, app_id='123', reserved=set())['changed'] == 1
         assert rest.writes[0][0] == 'PATCH'
         assert rest.calls[-1][:2] == ('GET', '/applications/123/commands/1')
-        assert rest.commands['1']['description'] == "Show all open tasks tagged 'Research'"
+        assert rest.commands['1']['description'] == "Show all open tasks in project 'Research'"
         assert sync.reconcile('fixture', {'Research'}, app_id='123', reserved=set())['changed'] == 0
 
 

@@ -23,12 +23,12 @@ import uuid
 
 # Shared schema is pure; load source-relative without importing task_ops or state.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".hermes" / "scripts"))
-from task_schema import validate_project_registry
+from task_schema import validate_est_time, validate_project_registry
 from notion_transport import (Client, State, SyncError, SyncBusy, require, SOURCE_ID, DB_ID,
     STATE_ROOT, UUID_RE, open_dir, strict_json, query_all)
 
-FIELDS = ('name', 'project_id', 'done', 'start_date', 'due_date', 'priority', 'recurrence', 'notes')
-TYPES = dict(zip(FIELDS, ('title', 'relation', 'checkbox', 'date', 'date', 'select', 'rich_text', 'rich_text')))
+FIELDS = ('name', 'project_id', 'done', 'start_date', 'due_date', 'priority', 'recurrence', 'notes', 'est_time')
+TYPES = dict(zip(FIELDS, ('title', 'relation', 'checkbox', 'date', 'date', 'select', 'rich_text', 'rich_text', 'number')))
 PROJECT_ID_RE = re.compile(r'P-[1-9][0-9]*')
 PROJECT_SOURCE = '3d463936-8ded-80e7-82bd-000bb7b17b11'
 
@@ -103,6 +103,10 @@ def fields(row, *, blank=False):
             except ValueError:
                 raise SyncError('invalid-date') from None
     require(out['recurrence'] is None or isinstance(out['recurrence'], str), 'invalid-recurrence')
+    try:
+        validate_est_time(out['est_time'])
+    except ValueError:
+        raise SyncError('invalid-est-time') from None
     # Canonical absence is null; Notion rich_text cannot distinguish null/empty.
     require(out['recurrence'] != '', 'empty-recurrence')
     for f in ('name', 'notes', 'recurrence'):
@@ -159,6 +163,11 @@ def properties(values, columns, marker=None):
             require(type(value) is bool, 'invalid-done')
         elif typ == 'select':
             value = {'name': value}
+        elif typ == 'number':
+            try:
+                validate_est_time(value)
+            except ValueError:
+                raise SyncError('invalid-est-time') from None
         else:
             value = None if value is None else {'start': value, 'end': None, 'time_zone': None}
         out[columns[f]] = {typ: value}
@@ -175,9 +184,20 @@ def checkbox_binding(value):
     return deepcopy(value)
 
 
-def schema(api, catalog=None, *, mapping=None):
+def est_time_binding(value):
+    require(isinstance(value, dict) and set(value) == {'source_id', 'est_time_property_id'} and
+            value['source_id'] == SOURCE_ID and isinstance(value['est_time_property_id'], str) and
+            bool(re.fullmatch(r'[A-Za-z0-9_%\\:;?@!$&*+.,~=-]{1,128}', value['est_time_property_id'])) and
+            value['est_time_property_id'] not in {*PROPERTY_IDS.values(), 'US%5Cb'},
+            'invalid-est-time-binding')
+    return deepcopy(value)
+
+
+def schema(api, catalog=None, *, mapping=None, est_mapping=None):
     binding = checkbox_binding(mapping)
-    property_ids = {**PROPERTY_IDS, 'done': binding['done_property_id']}
+    estimate = est_time_binding(est_mapping)
+    property_ids = {**PROPERTY_IDS, 'done': binding['done_property_id'],
+                    'est_time': estimate['est_time_property_id']}
     source = api.request('GET', '/data_sources/' + SOURCE_ID)
     require(source.get('object') == 'data_source' and source.get('id') == SOURCE_ID and
             source.get('parent', {}).get('database_id') == DB_ID, 'wrong-container')
@@ -205,6 +225,8 @@ def schema(api, catalog=None, *, mapping=None):
             require(isinstance(options, list) and all(isinstance(o, dict) and isinstance(o.get('name'), str) for o in options), 'invalid-schema-options')
             required = PRIORITIES
             require(required <= {o['name'] for o in options}, 'missing-schema-options')
+        if f == 'est_time':
+            require(prop.get('number', {}).get('format') == 'number', 'est-time-format-mismatch')
     return columns
 
 def page_identity(page, expected_id=None, *, allow_trash=False):
@@ -252,6 +274,11 @@ def page_fields(page, columns, *, blank=False, intake=False):
                 value = {'name': 'medium'}
             require(isinstance(value, dict) and isinstance(value.get('name'), str), 'missing-remote-option')
             value = value['name']  # IDs, color, nullable description are server metadata.
+        elif typ == 'number':
+            try:
+                validate_est_time(value)
+            except ValueError:
+                raise SyncError('invalid-est-time') from None
         elif value is not None:
             require(isinstance(value, dict) and value.get('end') is None and value.get('time_zone') is None, 'unsupported-date-range')
             value = value.get('start')
@@ -436,7 +463,7 @@ def discover(api, columns, local, state, cancellations=None):
     return pages, by_marker, unowned
 
 def initialize(api, core, store, *, ignored, apply=False, verified_baselines=None):
-    """No divergent adoption. Optional parent-verified baselines map key -> eight
+    """No divergent adoption. Optional parent-verified baselines map key -> nine
     fields; intended for an independently verified old pilot receipt migration.
     A supplied baseline must equal CURRENT canonical fields; it is not authority.
     """
@@ -444,7 +471,8 @@ def initialize(api, core, store, *, ignored, apply=False, verified_baselines=Non
     state = {'version': 1, 'source_id': SOURCE_ID, 'database_id': DB_ID, 'ignored': sorted(ignored), 'bindings': {}, 'pending': {}}
     validate_state(state)
     local = validate_rows(core.read())
-    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'),
+                     est_mapping=store.read('est-time-schema.json'))
     pages, owned, _ = discover(api, columns, local, state)
     conflicts = {}
     seeds = verified_baselines or {}
@@ -570,7 +598,8 @@ def enable_deletions(api, core, store, *, apply=False):
     require('deletion_policy' not in state, 'deletion-policy-already-enabled')
     require(not state['pending'], 'pending-operations-block-cutover')
     local = validate_rows(core.read())
-    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'),
+                     est_mapping=store.read('est-time-schema.json'))
     active_container(api)
     policy = {'enrolled': {}, 'excluded': {}, 'deleted': {}}
     observations, conflicts = {}, {}
@@ -620,7 +649,8 @@ def execute_cancel(api, core, store, state, slot, columns):
     require(slot not in validate_rows(core.read()), 'cancelled-task-reappeared')
     active_container(api)
     # Revalidate pinned schema immediately before the destructive (recoverable) PATCH.
-    schema(api, columns.catalog, mapping=store.read('checkbox-schema.json'))
+    schema(api, columns.catalog, mapping=store.read('checkbox-schema.json'),
+           est_mapping=store.read('est-time-schema.json'))
     page = api.request('GET', '/pages/' + op['page_id'])
     page_identity(page, op['page_id'], allow_trash=True)
     require(marker(page) == slot and page_fields(page, columns) == op['before'], 'cancellation-remote-changed')
@@ -634,7 +664,8 @@ def execute_cancel(api, core, store, state, slot, columns):
     require(after['in_trash'] is True and marker(after) == slot and
             page_fields(after, columns) == op['before'], 'cancellation-readback-failed')
     active_container(api)
-    schema(api, columns.catalog, mapping=store.read('checkbox-schema.json'))
+    schema(api, columns.catalog, mapping=store.read('checkbox-schema.json'),
+           est_mapping=store.read('est-time-schema.json'))
     require(cancellation(core, slot, op['page_id']) == receipt and
             slot not in validate_rows(core.read()), 'cancellation-source-changed')
     policy = state.setdefault('deletion_policy', {'enrolled': {}, 'excluded': {}, 'deleted': {}})
@@ -696,7 +727,8 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
         return {'planned': len(repairs), 'selected': len(selected), 'attempted': len(selected) if apply else 0,
                 'applied': applied, 'pending': len(state['pending']), 'conflicts': conflicts}
     local = validate_rows(core.read())
-    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'),
+                     est_mapping=store.read('est-time-schema.json'))
     if 'deletion_policy' in state:
         active_container(api)
     cancellations = {}
@@ -737,7 +769,7 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
                 conflicts[k] = 'uninitialized-owned-page'
             elif row.get('_notion_page_id'):
                 conflicts[k] = 'unbound-origin-page'
-            elif row['done'] is False:
+            else:
                 candidates.append((k, operation('create', row, None, None, current, k)))
             continue
         page = pages[binding['page_id']]
@@ -853,7 +885,8 @@ def resolve_equal(api, core, store, *, key_value, expected_operation_id, expecte
         require(op['kind'] != 'intake' or row.get('_notion_page_id') == op['page_id'], 'resolution-origin-mismatch')
     if uncommitted_delete:
         active_container(api)
-    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'))
+    columns = schema(api, load_project_catalog(core, store), mapping=store.read('checkbox-schema.json'),
+                     est_mapping=store.read('est-time-schema.json'))
     _, owned, _ = discover(api, columns, local, state)
     require(owned.get(key_value) == op['page_id'], 'resolution-ownership-mismatch')
     page, remote = get_page(api, op['page_id'], columns, key_value)

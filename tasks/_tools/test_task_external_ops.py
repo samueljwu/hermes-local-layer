@@ -119,13 +119,14 @@ def test_all_fields_clears_and_due_only_order():
     t = ops.add_task('second', '2026-05-20')
     assert t['id'].startswith('T-1-')
     fields = dict(name='renamed', done=False, start_date='2026-05-18',
-                  due_date='2026-05-21', priority='high', project_id='P-7', notes='edited', recurrence='daily')
+                  due_date='2026-05-21', priority='high', project_id='P-7', notes='edited',
+                  recurrence='daily', est_time=1.25)
     t = ops.apply_external_change(t['id'], fields, 1, 'all')
     assert all(t[k] == v for k, v in fields.items())
     assert t['reminder'] == '2026-05-20'
     assert ops.resolve_task_identity(ops.read_registry(), first['id'])['_revision'] == 1
-    t = ops.apply_external_change(t['id'], dict(start_date=None, due_date=None, recurrence=None), 2, 'clear')
-    assert t['start_date'] is t['due_date'] is t['recurrence'] is t['reminder'] is None
+    t = ops.apply_external_change(t['id'], dict(start_date=None, due_date=None, recurrence=None, est_time=None), 2, 'clear')
+    assert t['start_date'] is t['due_date'] is t['recurrence'] is t['reminder'] is t['est_time'] is None
     assert ops.apply_external_change(t['id'], {}, 3, 'noop')['_revision'] == 3
 
 
@@ -154,6 +155,7 @@ def test_strict_revision_even_closed(bad):
 @pytest.mark.parametrize('field,value', [('start_date', '2026-02-30'), ('start_date', False),
                                         ('start_date', '2026-05-21'), ('priority', 'bogus'),
                                         ('status', 'pending'), ('name', None), ('notes', []),
+                                        ('est_time', True), ('est_time', -1), ('est_time', float('inf')),
                                         ('_revision', 99), ('_external_receipt', {})])
 def test_invalid_external_before_commit(field, value):
     t = ops.add_task('one', '2026-05-20')

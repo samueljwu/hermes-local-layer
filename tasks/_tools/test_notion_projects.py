@@ -82,7 +82,7 @@ class API(TaskAPI):
             page = task_page(r, 10 + i, s.key(r))
             for name, prop in page['properties'].items():
                 field = 'project_id' if name == 'project' else name
-                prop['id'] = 'fixtureDone' if field == 'done' else s.PROPERTY_IDS[field]
+                prop['id'] = {'done': 'fixtureDone', 'est_time': 'fixtureEst'}.get(field, s.PROPERTY_IDS.get(field))
                 prop['type'] = 'rich_text' if field == s.MARKER else s.TYPES[field]
             page['properties']['project'] = {'id': p.TASK_PROJECT, 'type': 'relation', 'relation': [], 'has_more': False}
             pages.append(page)

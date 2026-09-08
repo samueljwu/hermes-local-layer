@@ -32,6 +32,8 @@ def test_due_reminder_consumers_use_canonical_task_ops_when_home_drifts(tmp_path
         # loaded from this checkout; TASK_OPS_PATH itself remains unmodified.
         code = f"""
 import importlib.util
+import sys
+sys.path.insert(0, {str(ROOT / '.hermes/scripts')!r})
 import local_ops
 from pathlib import Path
 real_spec = importlib.util.spec_from_file_location

@@ -36,12 +36,13 @@ CATALOG = {p['id']: {'name': p['name'], 'page_id': str(uuid.UUID(int=200+i))} fo
 COLS = s.ProjectColumns({f: 'project' if f == 'project_id' else f for f in s.FIELDS}, CATALOG)
 OBSERVED_IDS = {'name': 'title', 'start_date': '%3BBh%3B', 'project_id': 'H%3BQa',
                 'recurrence': 'SYBU', 'done': 'fixtureDone', 'hermes_task_key': 'ZyNW',
-                'priority': 'aBIM', 'due_date': 'h%5Cw%3F', 'notes': 'so%7DJ'}
+                'priority': 'aBIM', 'due_date': 'h%5Cw%3F', 'notes': 'so%7DJ',
+                'est_time': 'fixtureEst'}
 
 def row(n=1, **changes):
     value = dict(id=f'T-1-{n}', name='Fixture work', project_id='P-5', done=False,
                  start_date='2026-05-18', due_date='2026-05-20', priority='medium',
-                 recurrence=None, notes='', reminder=None, _revision=1)
+                 recurrence=None, notes='', est_time=None, reminder=None, _revision=1)
     value.update(changes)
     return value
 
@@ -76,6 +77,8 @@ class API:
                 if f == 'priority':
                     values = s.PRIORITIES
                     props[f][typ] = {'options': [{'name': v, 'id': v, 'description': None} for v in sorted(values)]}
+                if f == 'est_time':
+                    props[f][typ] = {'format': 'number'}
             props['project'] = props.pop('project_id')
             props['project']['relation'] = {'data_source_id': s.PROJECT_SOURCE, 'type': 'dual_property',
                                               'dual_property': {'synced_property_id': 'oQv%5B'}}
@@ -126,6 +129,8 @@ class Memory:
     def read(self, name='two-way.json'):
         if name == 'checkbox-schema.json':
             return {'source_id': s.SOURCE_ID, 'done_property_id': 'fixtureDone'}
+        if name == 'est-time-schema.json':
+            return {'source_id': s.SOURCE_ID, 'est_time_property_id': 'fixtureEst'}
         if name == 'projects.json':
             import notion_projects
             value = notion_projects.initial_state()
@@ -201,6 +206,37 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(self.store.writes, writes)
         self.assertFalse(self.api.mutations())
         self.assertFalse(self.local.calls)
+
+    def test_est_time_schema_binding_and_number_format_are_pinned(self):
+        checkbox = {'source_id': s.SOURCE_ID, 'done_property_id': 'fixtureDone'}
+        for bad in (None, {}, {'source_id': 'wrong', 'est_time_property_id': 'fixtureEst'},
+                    {'source_id': s.SOURCE_ID, 'est_time_property_id': 'title'}):
+            with self.assertRaises(SyncError):
+                s.schema(self.api, CATALOG, mapping=checkbox, est_mapping=bad)
+        self.api.property_ids['est_time'] = 'replacement'
+        with self.assertRaisesRegex(SyncError, 'schema-property-mismatch'):
+            s.schema(self.api, CATALOG, mapping=checkbox,
+                     est_mapping={'source_id': s.SOURCE_ID, 'est_time_property_id': 'fixtureEst'})
+        self.api.property_ids['est_time'] = 'fixtureEst'
+        original = self.api.request
+        def wrong_format(method, path, body=None):
+            value = original(method, path, body)
+            if path == '/data_sources/' + s.SOURCE_ID:
+                value['properties']['est_time']['number']['format'] = 'percent'
+            return value
+        self.api.request = wrong_format
+        with self.assertRaisesRegex(SyncError, 'est-time-format-mismatch'):
+            s.schema(self.api, CATALOG, mapping=checkbox,
+                     est_mapping={'source_id': s.SOURCE_ID, 'est_time_property_id': 'fixtureEst'})
+
+    def test_est_time_rejects_nonfinite_negative_boolean_and_oversized_numbers(self):
+        for value in (True, -1, 10**400, float('inf'), float('-inf'), float('nan')):
+            with self.subTest(value=value), self.assertRaisesRegex(SyncError, 'invalid-est-time'):
+                s.fields(row(est_time=value))
+            remote = page(row(), mark=s.key(row()))
+            remote['properties']['est_time']['number'] = value
+            with self.subTest(remote=value), self.assertRaisesRegex(SyncError, 'invalid-est-time'):
+                s.page_fields(remote, COLS)
 
     def test_dry_run_never_writes(self):
         self.local.edit(notes='local')
@@ -280,6 +316,16 @@ class ConnectorTests(unittest.TestCase):
         result = self.sync(apply=True)
         self.assertEqual(result['conflicts'][s.key(row(2))], 'ambiguous-create-needs-operator')
         self.assertEqual(len(self.api.mutations()), 1)
+    def test_unbound_completed_local_row_is_exported(self):
+        completed = row(2, done=True, est_time=1.5)
+        self.local.rows.append(completed)
+        result = self.sync(apply=True)
+        self.assertEqual(result['applied'], 1)
+        binding = self.store.value['bindings'][s.key(completed)]
+        remote = s.page_fields(self.api.pages[binding['page_id']], COLS)
+        self.assertTrue(remote['done'])
+        self.assertEqual(remote['est_time'], 1.5)
+        self.assertEqual(binding['baseline']['est_time'], 1.5)
     def test_intake_blank_closed_samples_caps_and_replay(self):
         for n in range(20, 24):
             p = page(row(n), n)
@@ -527,7 +573,7 @@ class RealCanonicalTests(unittest.TestCase):
                 s.resolve_equal(self.api, self.core, self.store, **(kw | bad), apply=True)
         for f in s.FIELDS:
             original = deepcopy(self.api.pages[self.pid])
-            value = None if f in ('start_date', 'due_date') else ('monthly' if f == 'recurrence' else {'done': True, 'priority': 'high', 'project_id': 'P-1'}.get(f, 'different'))
+            value = None if f in ('start_date', 'due_date') else (2.5 if f == 'est_time' else ('monthly' if f == 'recurrence' else {'done': True, 'priority': 'high', 'project_id': 'P-1'}.get(f, 'different')))
             self.api.edit(self.pid, **{f: value})
             with self.assertRaises(SyncError):
                 s.resolve_equal(self.api, self.core, self.store, **kw, apply=True)
@@ -604,10 +650,11 @@ class RealCanonicalTests(unittest.TestCase):
             with self.assertRaises(SyncError):
                 s.page_fields(owned, COLS)
 
-    def test_real_eight_field_edit_and_clear_dates(self):
+    def test_real_nine_field_edit_and_clear_dates(self):
         self.seed()
         values = dict(name='Renamed fixture', project_id='P-1', done=False, start_date='2026-05-19',
-                      due_date='2026-05-21', priority='high', recurrence='weekly', notes='Changed fixture')
+                      due_date='2026-05-21', priority='high', recurrence='weekly', notes='Changed fixture',
+                      est_time=None)
         self.api.edit(self.pid, **values)
         self.assertEqual(s.reconcile(self.api, self.core, self.store, apply=True)['applied'], 1)
         self.assertEqual(s.fields(self.core.read()[0]), values)
