@@ -106,10 +106,15 @@ class BackupDocumentationGuardTests(unittest.TestCase):
         guard = load_guard()
         before = {"updated_at": "earlier", "jobs": [
             {"id": "one", "name": "Daily", "script": "run.py", "last_run_at": None,
+             "failure_streak": 0, "last_dispatch": None,
+             "last_delivery_unverified": None,
              "repeat": {"completed": 1, "times": None}},
         ]}
         after = {"updated_at": "later", "jobs": [
             {"id": "one", "name": "Daily", "script": "run.py", "last_run_at": "later",
+             "failure_streak": 2,
+             "last_dispatch": {"scheduled_at": "later", "kind": "on_time"},
+             "last_delivery_unverified": False,
              "repeat": {"completed": 2, "times": None}},
         ]}
         temporary, repo = self._cron_repo(before, after)
