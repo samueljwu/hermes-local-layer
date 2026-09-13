@@ -288,6 +288,19 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(len(self.local.receipts), 1)
         self.assertEqual(self.local.calls[-1]['operation_id'], original)
         self.assertEqual(self.local.rows[0]['_revision'], 2)
+    def test_postcommit_replay_does_not_coalesce_new_remote_edit(self):
+        self.api.edit(self.pid, notes='first remote')
+        self.local.after_commit = lambda: (_ for _ in ()).throw(OSError('crash'))
+        with self.assertRaises(OSError):
+            self.sync(apply=True)
+        self.local.after_commit = None
+        self.api.edit(self.pid, priority='urgent')
+        result = self.sync(apply=True)
+        self.assertEqual(result['applied'], 0)
+        self.assertEqual(result['conflicts'][s.key(row())], 'remote-changed-before-commit')
+        self.assertEqual(len(self.local.receipts), 1)
+        self.assertEqual(self.local.rows[0]['notes'], 'first remote')
+        self.assertEqual(self.local.rows[0]['priority'], 'medium')
     def test_patch_lost_ack_replay_without_second_patch(self):
         self.local.edit(notes='edit')
         self.api.after_patch = lambda _: (_ for _ in ()).throw(OSError('lost ack'))
@@ -348,7 +361,7 @@ class ConnectorTests(unittest.TestCase):
         def change(pid):
             nonlocal calls
             calls += 1
-            if calls == 2:
+            if calls == 1:
                 self.api.edit(pid, priority='high')
         self.api.before_get = change
         result = self.sync(apply=True)
@@ -361,11 +374,41 @@ class ConnectorTests(unittest.TestCase):
         result = self.sync(apply=True)
         self.assertEqual(result['conflicts'][s.key(row())], 'remote-readback-mismatch')
         self.assertEqual(self.store.value['bindings'][s.key(row())]['baseline'], s.fields(row()))
+    def test_query_present_owned_avoids_redundant_get(self):
+        self.assertEqual(self.sync(apply=True)['planned'], 0)
+        self.assertFalse(any(c[:2] == ('GET', '/pages/' + self.pid) for c in self.api.calls))
+        self.assertFalse(self.api.mutations())
     def test_query_missing_owned_gets_not_recreates(self):
         self.api.hide.add(self.pid)
         self.assertEqual(self.sync(apply=True)['planned'], 0)
         self.assertTrue(any(c[:2] == ('GET', '/pages/' + self.pid) for c in self.api.calls))
         self.assertFalse(self.api.mutations())
+    def test_prepared_pull_allows_timestamp_only_drift(self):
+        self.api.edit(self.pid, notes='remote')
+        remote = s.page_fields(self.api.pages[self.pid], COLS)
+        mark = s.key(row())
+        self.store.value['pending'][mark] = s.operation(
+            'pull', self.local.rows[0], self.api.pages[self.pid], remote, remote, mark)
+        self.api.pages[self.pid]['last_edited_time'] += 'x'
+        result = self.sync(apply=True)
+        self.assertEqual(result['applied'], 1)
+        self.assertEqual(result['conflicts'], {})
+        self.assertEqual(self.local.rows[0]['notes'], 'remote')
+        self.assertEqual(self.store.value['pending'], {})
+    def test_prepared_pull_coalesces_newer_remote_fields(self):
+        self.api.edit(self.pid, project_id='P-1')
+        first = s.page_fields(self.api.pages[self.pid], COLS)
+        mark = s.key(row())
+        op = s.operation('pull', self.local.rows[0], self.api.pages[self.pid], first, first, mark)
+        original_operation = op['operation_id']
+        self.store.value['pending'][mark] = op
+        self.api.edit(self.pid, est_time=1.5)
+        result = self.sync(apply=True)
+        self.assertEqual(result['applied'], 1)
+        self.assertEqual(result['conflicts'], {})
+        self.assertEqual(self.local.rows[0]['project_id'], 'P-1')
+        self.assertEqual(self.local.rows[0]['est_time'], 1.5)
+        self.assertEqual(self.store.value['bindings'][mark]['receipt'], original_operation)
     def test_remote_danger_blocks(self):
         changes = [lambda p: p.update(in_trash=True), lambda p: p.update(in_trash=None),
                    lambda p: p['parent'].update(data_source_id=SAMPLES[0]),

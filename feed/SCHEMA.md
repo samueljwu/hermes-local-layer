@@ -35,7 +35,7 @@ If a user wants a recommendation ingested into wiki, captured in journal, or con
 
 ## Task Registry Signals
 
-`collect_signals` reads the last 35 records in canonical `/home/hermes/tasks/_meta/task_registry.json` order using `name`, single `tag`, `status`, and `notes`. It includes `not_started`, `in_progress`, `completed`, and `cancelled` without filtering to open work; the registry signal weight remains 0.45. Status strings and their tokenizer fragments are noise, not interest topics. Historical task-log signals retain their existing text and weight.
+`collect_signals` reads the last 35 records in canonical `/home/hermes/tasks/_meta/task_registry.json` order using `name`, strict boolean `done`, `project_id`, and `notes`. It joins `project_id` to the canonical project catalog for display and includes both pending (`done=false`) and completed (`done=true`) retained records without filtering to open work; archived cancellations are not active registry inputs. The registry signal weight remains 0.45. Done/Pending labels and their tokenizer fragments are operational noise, not interest topics. Historical task-log signals retain their existing text and weight.
 
 ## Source Universe
 

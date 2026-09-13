@@ -150,6 +150,15 @@ class SyncTests(unittest.TestCase):
         live.refresh_handlers()
         self.assertIsNotNone(get_plugin_command_handler("new-project"))
 
+    def test_receipt_rejects_symlinked_gateway_parent(self):
+        external = self.home / "external"
+        external.mkdir()
+        (self.home / "gateway").symlink_to(external, target_is_directory=True)
+        live = self.plugin.LiveTags(self.ctx)
+        with self.assertRaises(OSError):
+            live._write_receipt({"school": "School"})
+        self.assertFalse((external / "task_tag_commands_status.json").exists())
+
     def test_native_capacity_keeps_existing_tags_usable(self):
         async def scenario():
             import discord

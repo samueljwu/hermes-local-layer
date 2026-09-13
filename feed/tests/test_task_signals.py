@@ -35,3 +35,10 @@ def test_name_only_last35_all_statuses_without_external_reads(tmp_path):
 
 def test_schema_status_tokens_are_not_interest_terms():
     assert feed.tokenize('not_started in_progress completed cancelled Done Pending') == []
+
+
+def test_schema_documents_canonical_task_signal_fields():
+    schema = (Path(__file__).resolve().parents[1] / 'SCHEMA.md').read_text(encoding='utf-8')
+    task_signal_section = schema.split('## Task Registry Signals', 1)[1].split('## Source Universe', 1)[0]
+    assert '`name`, strict boolean `done`, `project_id`, and `notes`' in task_signal_section
+    assert 'single `tag`, `status`' not in task_signal_section

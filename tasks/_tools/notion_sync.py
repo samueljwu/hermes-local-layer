@@ -447,9 +447,13 @@ def discover(api, columns, local, state, cancellations=None):
         require(k in local or pending_delete or k in cancellations, 'missing-canonical-binding')
         pid = binding['page_id']
         require(k not in by_marker or by_marker[k] == pid, 'binding-marker-mismatch')
-        # Query absence is NOT a deletion signal. GET every bound page, including absent ones.
-        page = api.request('GET', '/pages/' + pid)
-        page_identity(page, pid, allow_trash=bool(policy or cancellations))
+        # Query absence is NOT a deletion signal. A present query result already
+        # contains the complete page properties; only absent bindings need a GET.
+        # This keeps the normal scan O(query pages), not O(bound tasks) requests.
+        page = pages.get(pid)
+        if page is None:
+            page = api.request('GET', '/pages/' + pid)
+            page_identity(page, pid, allow_trash=bool(policy or cancellations))
         require(marker(page) == k, 'ownership-changed')
         page_fields(page, columns)
         require(pid not in unowned, 'owned-marker-cleared')
@@ -517,10 +521,29 @@ def execute_operation(api, core, store, state, slot, columns, owned):
         return
     if op['phase'] == 'prepared':
         if op['kind'] in {'pull', 'intake'}:
-            # On replay canonical dedupe may already have committed. Its receipt is
-            # authoritative; remote input must still equal the originally observed edit.
+            # On replay canonical dedupe may already have committed. Refresh a
+            # pull snapshot only while canonical still proves it was uncommitted.
             page, remote = get_page(api, op['page_id'], columns, op['marker'])
-            require(remote == op['before'] and page['last_edited_time'] == op['remote_revision'], 'remote-changed-before-commit')
+            if remote != op['before']:
+                # Coalesce newer Notion edits only while the original pull is
+                # provably uncommitted: canonical still equals its bound source
+                # revision/baseline. A post-commit replay must retain its original
+                # intent and fail closed instead of absorbing another edit.
+                require(op['kind'] == 'pull', 'remote-changed-before-commit')
+                current = validate_rows(core.read())
+                binding = state['bindings'].get(slot)
+                require(slot in current and binding is not None and
+                        revision(current[slot]) == op['source_revision'] and
+                        revision(current[slot]) == binding['revision'] and
+                        fields(current[slot]) == binding['baseline'],
+                        'remote-changed-before-commit')
+                op['before'] = deepcopy(remote)
+                op['target'] = deepcopy(remote)
+                op['remote_revision'] = page['last_edited_time']
+                store.write(state)
+            # Notion can advance last_edited_time for relation/rollup bookkeeping
+            # without changing any shared task field. The fresh identity, marker,
+            # and complete shared-field equality are the conditional commit guard.
             result = core.apply_external_change(task_id=op['task_id'], fields=deepcopy(op['target']),
                 expected_revision=op['source_revision'], operation_id=op['operation_id'],
                 origin_page_id=op['page_id'] if op['kind'] == 'intake' else None)
@@ -691,7 +714,8 @@ def execute_delete(api, core, store, state, slot, columns):
         page_identity(page, op['page_id'], allow_trash=True)
         require(marker(page) == slot and page['in_trash'] is True and
                 page['last_edited_time'] == op['remote_revision'] and
-                page_fields(page, columns) == op['before'] == op['target'], 'deletion-remote-changed')
+                page_fields(page, columns) == op['before'] and
+                op['target'] == state['bindings'][slot]['baseline'], 'deletion-remote-changed')
     core.delete_external_task(task_id=op['task_id'], expected_revision=op['source_revision'],
                              operation_id=op['operation_id'], page_id=op['page_id'])
     require(slot not in validate_rows(core.read()) and core.deletion_receipt(op), 'deletion-readback-failed')
@@ -787,9 +811,13 @@ def reconcile(api, core, store, *, apply=False, max_actions=10, max_new_intakes=
         if page['in_trash']:
             if policy.get('enrolled', {}).get(k) != page['id']:
                 conflicts[k] = 'deletion-not-enrolled'
-            elif current != baseline or revision(row) != binding['revision'] or remote != baseline:
+            elif current != baseline or revision(row) != binding['revision']:
                 conflicts[k] = 'deletion-baseline-conflict'
             else:
+                # An enrolled, individually trashed row is an explicit deletion.
+                # Remote-only edits made before trash (for example checking done
+                # and then deleting) do not matter when canonical state has not
+                # changed since the shared baseline.
                 candidates.append((k, operation('delete', row, page, remote, current, k)))
             continue
         if current == remote == baseline:

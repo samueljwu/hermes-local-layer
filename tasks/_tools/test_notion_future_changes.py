@@ -113,6 +113,8 @@ class FutureChangesTests(unittest.TestCase):
         self.enable()
         original = self.api.request
         for mode in ('404', '403', 'db-trash', 'source-trash', 'marker', 'parent', 'missing-trash'):
+            if mode in ('404', '403'):
+                self.api.hide.add(self.pid)
             def guarded(method, path, body=None):
                 if path == '/pages/' + self.pid and mode in ('404', '403'):
                     raise s.SyncError('http-' + mode)
@@ -121,17 +123,22 @@ class FutureChangesTests(unittest.TestCase):
                     value['in_trash'] = True
                 if path == '/data_sources/' + s.SOURCE_ID and mode == 'source-trash':
                     value['in_trash'] = True
-                if path == '/pages/' + self.pid:
+                pages = ([value] if path == '/pages/' + self.pid else
+                         value.get('results', []) if path == fixtures.QUERY_PATH else [])
+                for page in pages:
+                    if page.get('id') != self.pid:
+                        continue
                     if mode == 'marker':
-                        value['properties'][s.MARKER]['rich_text'] = s.rich_text('hermes_tasks:999')
+                        page['properties'][s.MARKER]['rich_text'] = s.rich_text('hermes_tasks:999')
                     if mode == 'parent':
-                        value['parent']['data_source_id'] = str(uuid.uuid4())
+                        page['parent']['data_source_id'] = str(uuid.uuid4())
                     if mode == 'missing-trash':
-                        value.pop('in_trash')
+                        page.pop('in_trash')
                 return value
             with patch.object(self.api, 'request', side_effect=guarded):
                 with self.assertRaises(s.SyncError):
                     s.reconcile(self.api, self.core, self.store, apply=True)
+            self.api.hide.discard(self.pid)
             self.assertEqual(len(self.core.read()), 1)
             self.assertEqual(self.ops.read_deletions(), {})
 
@@ -143,6 +150,18 @@ class FutureChangesTests(unittest.TestCase):
         result = s.reconcile(self.api, self.core, self.store, apply=True)
         self.assertEqual(result['conflicts'][s.key(r)], 'deletion-baseline-conflict')
         self.assertEqual(len(self.core.read()), 1)
+
+    def test_remote_edit_then_trash_deletes_when_local_is_unchanged(self):
+        r = self.seed()
+        self.enable()
+        self.api.edit(self.pid, done=True)
+        self.trash()
+        result = s.reconcile(self.api, self.core, self.store, apply=True)
+        self.assertEqual(result['applied'], 1)
+        self.assertEqual(result['conflicts'], {})
+        self.assertEqual(self.core.read(), [])
+        self.assertEqual(self.store.value['deletion_policy']['deleted'],
+                         {s.key(r): self.pid})
 
     def test_revision_race_before_delete_stops_under_lock(self):
         r = self.seed()

@@ -349,7 +349,7 @@ Tasks:
 
 ```bash
 /home/hermes/tasks/_tools/task_ops.py validate
-python3 /home/hermes/tasks/_tools/test_task_ops.py
+uv run --with pytest python3 /home/hermes/tasks/_tools/test_task_ops.py
 /home/hermes/.hermes/scripts/weekly_task_completion_report.sh
 test -s /home/hermes/task-completion-report/latest_report.json
 test -s /home/hermes/task-completion-report/weekly_completed_tasks_last_10_weeks.png
