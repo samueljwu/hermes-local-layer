@@ -3,9 +3,17 @@ from pathlib import Path
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 spec = importlib.util.spec_from_file_location('notion_cron_wrapper_test', Path(__file__).with_name('sync_hermes_tasks_notion.py'))
 wrapper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wrapper)
+
+
+@pytest.fixture(autouse=True)
+def isolated_alert_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(wrapper, 'ALERT_STATE', tmp_path / 'alert-state.json')
+    monkeypatch.setattr(wrapper, 'ALERT_AFTER_FAILURES', 1)
 
 
 def test_success_is_silent_and_bounded(monkeypatch, capsys):
@@ -45,6 +53,8 @@ def test_busy_overlap_is_silent(monkeypatch, capsys):
 
 def test_malformed_busy_is_not_silenced(monkeypatch, capsys):
     for raw in ('{}', 'not-json', '{"busy":1}', '{"busy":true,"error":"secret"}'):
+        wrapper.clear_alert('tasks')
+        wrapper.clear_alert('projects')
         monkeypatch.setattr(wrapper, 'run_connector', lambda *a, **k: SimpleNamespace(returncode=75, stdout=raw, stderr='SECRET'))
         assert wrapper.main() == 0
         out = capsys.readouterr().out
@@ -191,6 +201,7 @@ def test_project_reports_are_validated_without_leaking(monkeypatch, capsys):
     clean = SimpleNamespace(returncode=0, stdout='{"planned":0,"applied":0,"pending":0,"conflicts":{}}')
     for code, raw, silent in [(75, '{"busy":true}', True), (75, '{"busy":1}', False),
                               (0, '{}', False), (0, '{"planned":0,"applied":0,"pending":0,"conflicts":{"key":"SECRET_REMOTE"}}', False)]:
+        wrapper.clear_alert('projects')
         results = iter([clean, SimpleNamespace(returncode=code, stdout=raw)])
         monkeypatch.setattr(wrapper, 'run_connector', lambda *a, **k: next(results))
         assert wrapper.main() == 0
@@ -211,3 +222,31 @@ def test_project_timeout_preserves_task_success(monkeypatch, capsys):
     assert calls == [wrapper.COMMAND, wrapper.PROJECT_COMMAND]
     out = capsys.readouterr().out
     assert 'project sync needs review' in out and 'SECRET_REMOTE' not in out
+
+
+def test_continuous_failure_alerts_once_until_recovery(monkeypatch, capsys):
+    failed = SimpleNamespace(returncode=2, stdout='SECRET_REMOTE', stderr='SECRET')
+    clean = SimpleNamespace(returncode=0, stdout='{"planned":0,"applied":0,"pending":0,"conflicts":{}}')
+    monkeypatch.setattr(wrapper, 'ALERT_AFTER_FAILURES', 3)
+
+    monkeypatch.setattr(wrapper, 'run_connector', lambda *a, **k: failed)
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out == ''
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out == ''
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out.count('ALERT:') == 2
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out == ''
+
+    monkeypatch.setattr(wrapper, 'run_connector', lambda *a, **k: clean)
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out == ''
+
+    monkeypatch.setattr(wrapper, 'run_connector', lambda *a, **k: failed)
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out == ''
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out == ''
+    assert wrapper.main() == 0
+    assert capsys.readouterr().out.count('ALERT:') == 2
