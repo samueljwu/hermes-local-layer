@@ -124,6 +124,7 @@ class API:
 class Memory:
     def __init__(self):
         self.value = None
+        self.files = {}
         self.writes = 0
         self.crash = None
     def read(self, name='two-way.json'):
@@ -136,8 +137,14 @@ class Memory:
             value = notion_projects.initial_state()
             value['bindings'] = {k: {'page_id': v['page_id'], 'marker': ''} for k, v in CATALOG.items()}
             return value
+        if name != 'two-way.json':
+            return deepcopy(self.files.get(name))
         return deepcopy(self.value)
-    def write(self, value):
+    def write(self, value, name='two-way.json'):
+        if name != 'two-way.json':
+            self.files[name] = deepcopy(value)
+            self.writes += 1
+            return
         s.validate_state(value)
         self.value = deepcopy(value)
         self.writes += 1
@@ -661,6 +668,41 @@ class RealCanonicalTests(unittest.TestCase):
         self.assertEqual(self.store.value['bindings'][k]['receipt'], op['operation_id'])
         self.assertEqual(self.ops.REGISTRY_PATH.read_bytes(), source)
         self.assertFalse(self.api.mutations())
+        self.assertEqual(s.reconcile(self.api, self.core, self.store, apply=True)['planned'], 0)
+
+    def test_abandon_prepared_trashed_intake_is_audited_and_idempotent(self):
+        self.seed()
+        s.enable_deletions(self.api, self.core, self.store, apply=True)
+        draft = page(row(name='Abandoned draft'), 70)
+        self.api.pages[draft['id']] = draft
+        # Force trash after the durable intent is prepared but before commit.
+        def trash_on_resume(pid):
+            if pid == draft['id']:
+                self.api.before_get = None
+                self.api.pages[pid]['in_trash'] = True
+                self.api.pages[pid]['last_edited_time'] += 'trash'
+        self.api.before_get = trash_on_resume
+        result = s.reconcile(self.api, self.core, self.store, apply=True)
+        self.assertEqual(result['conflicts'][draft['id']], 'trashed-or-unknown')
+        op = deepcopy(self.store.value['pending'][draft['id']])
+        source = self.ops.REGISTRY_PATH.read_bytes()
+        kw = {'page_id': draft['id'], 'expected_operation_id': op['operation_id']}
+        before = deepcopy(self.store.value)
+        self.assertEqual(s.abandon_intake(self.api, self.core, self.store, **kw)['applied'], 0)
+        self.assertEqual(self.store.value, before)
+        self.assertIsNone(self.store.read('abandoned-intakes.json'))
+        self.api.pages[draft['id']]['in_trash'] = False
+        with self.assertRaisesRegex(s.SyncError, 'abandon-page-not-trashed-draft'):
+            s.abandon_intake(self.api, self.core, self.store, **kw, apply=True)
+        self.api.pages[draft['id']]['in_trash'] = True
+        self.assertEqual(s.abandon_intake(self.api, self.core, self.store, **kw, apply=True)['applied'], 1)
+        self.assertNotIn(draft['id'], self.store.value['pending'])
+        receipt = self.store.read('abandoned-intakes.json')['receipts'][draft['id']]
+        self.assertEqual(receipt['operation_id'], op['operation_id'])
+        self.assertEqual(receipt['reason'], 'operator-abandoned-trashed-draft')
+        self.assertEqual(self.ops.REGISTRY_PATH.read_bytes(), source)
+        self.assertFalse(self.api.mutations())
+        self.assertEqual(s.abandon_intake(self.api, self.core, self.store, **kw, apply=True)['applied'], 0)
         self.assertEqual(s.reconcile(self.api, self.core, self.store, apply=True)['planned'], 0)
 
     def test_real_null_intake_normalizes_and_lost_ack_replays(self):

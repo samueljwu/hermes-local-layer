@@ -346,6 +346,37 @@ def validate_state(state):
         require(op['phase'] != 'committed' or (op['task_id'] is not None and op['result_revision'] is not None and op['marker'] is not None), 'incomplete-commit-state')
     return state
 
+
+def validate_abandoned_intakes(value):
+    """Validate the private audit ledger for operator-abandoned draft intakes."""
+    if value is None:
+        return {'version': 1, 'receipts': {}}
+    require(isinstance(value, dict) and set(value) == {'version', 'receipts'} and
+            value['version'] == 1 and isinstance(value['receipts'], dict),
+            'invalid-abandoned-intakes')
+    for pid, receipt in value['receipts'].items():
+        require(isinstance(pid, str) and UUID_RE.fullmatch(pid) and isinstance(receipt, dict) and
+                set(receipt) == {'operation_id', 'page_id', 'before', 'target', 'remote_revision',
+                                 'observed_remote_revision', 'abandoned_at', 'reason'} and
+                receipt['page_id'] == pid and isinstance(receipt['operation_id'], str) and
+                UUID_RE.fullmatch(receipt['operation_id']) and
+                receipt['reason'] == 'operator-abandoned-trashed-draft' and
+                isinstance(receipt['remote_revision'], str) and
+                isinstance(receipt['observed_remote_revision'], str),
+                'invalid-abandoned-intake-receipt')
+        require(isinstance(receipt['before'], dict) and isinstance(receipt['target'], dict) and
+                set(receipt['before']) == set(FIELDS) and set(receipt['target']) == set(FIELDS),
+                'invalid-abandoned-intake-fields')
+        fields(receipt['before'])
+        fields(receipt['target'])
+        try:
+            require(datetime.fromisoformat(receipt['abandoned_at']).tzinfo is not None,
+                    'invalid-abandoned-intake-time')
+        except (TypeError, ValueError):
+            raise SyncError('invalid-abandoned-intake-time') from None
+    return value
+
+
 class Core:
     """Source-relative canonical API adapter. Full registry is read under its lock."""
     def __init__(self, module=None):
@@ -940,10 +971,83 @@ def resolve_equal(api, core, store, *, key_value, expected_operation_id, expecte
         return {'planned': 1, 'applied': int(apply), 'conflicts': {}}
 
 
+def abandon_intake(api, core, store, *, page_id, expected_operation_id, apply=False):
+    """Archive and clear one uncommitted intake whose exact Notion draft is trashed.
+
+    The audit receipt is durably written before pending intent removal. This never
+    mutates canonical tasks or Notion and is idempotent after either write.
+    """
+    require(isinstance(page_id, str) and UUID_RE.fullmatch(page_id), 'invalid-abandon-page')
+    require(isinstance(expected_operation_id, str) and UUID_RE.fullmatch(expected_operation_id),
+            'invalid-abandon-operation')
+    ledger = validate_abandoned_intakes(store.read('abandoned-intakes.json'))
+    existing = ledger['receipts'].get(page_id)
+    with core.module.file_lock():
+        state = validate_state(deepcopy(store.read()))
+        local = validate_rows(core.read(locked=True))
+        op = state['pending'].get(page_id)
+        if existing is not None:
+            require(existing['operation_id'] == expected_operation_id,
+                    'abandoned-intake-receipt-mismatch')
+            if op is None:
+                return {'planned': 0, 'applied': 0, 'conflicts': {}}
+        require(isinstance(op, dict) and op['kind'] == 'intake' and op['phase'] == 'prepared' and
+                op['operation_id'] == expected_operation_id and op['page_id'] == page_id and
+                op['task_id'] is None and op['marker'] is None and op['source_revision'] is None and
+                op['result_revision'] is None and op['create_sent'] is False,
+                'abandon-operation-mismatch')
+        require(not any(r.get('_notion_page_id') == page_id or
+                        expected_operation_id in r.get('_external_receipt', {}).get('operations', {})
+                        for r in local.values()), 'abandon-canonical-receipt-present')
+        original_state, original_local = deepcopy(state), deepcopy(local)
+    if existing is None:
+        active_container(api)
+        columns = schema(api, load_project_catalog(core, store),
+            mapping=store.read('checkbox-schema.json'), est_mapping=store.read('est-time-schema.json'))
+        first = api.request('GET', '/pages/' + page_id)
+        page_identity(first, page_id, allow_trash=True)
+        require(first['in_trash'] is True and marker(first) is None, 'abandon-page-not-trashed-draft')
+        first_fields = page_fields(first, columns, intake=True)
+        require(first_fields == op['before'] == op['target'], 'abandon-draft-fields-changed')
+        second = api.request('GET', '/pages/' + page_id)
+        page_identity(second, page_id, allow_trash=True)
+        require(second['in_trash'] is True and marker(second) is None and
+                second['last_edited_time'] == first['last_edited_time'] and
+                page_fields(second, columns, intake=True) == first_fields, 'abandon-page-changed')
+        receipt = {'operation_id': expected_operation_id, 'page_id': page_id,
+                   'before': deepcopy(op['before']), 'target': deepcopy(op['target']),
+                   'remote_revision': op['remote_revision'],
+                   'observed_remote_revision': second['last_edited_time'],
+                   'abandoned_at': datetime.now().astimezone().isoformat(),
+                   'reason': 'operator-abandoned-trashed-draft'}
+    else:
+        receipt = deepcopy(existing)
+    with core.module.file_lock():
+        current = validate_rows(core.read(locked=True))
+        latest_state = validate_state(deepcopy(store.read()))
+        latest_ledger = validate_abandoned_intakes(store.read('abandoned-intakes.json'))
+        require(current == original_local and latest_state == original_state,
+                'abandon-source-or-state-changed')
+        if existing is None:
+            require(page_id not in latest_ledger['receipts'], 'abandon-ledger-changed')
+        else:
+            require(latest_ledger['receipts'].get(page_id) == existing, 'abandon-ledger-changed')
+        if apply:
+            if existing is None:
+                latest_ledger['receipts'][page_id] = receipt
+                validate_abandoned_intakes(latest_ledger)
+                store.write(latest_ledger, 'abandoned-intakes.json')
+            del latest_state['pending'][page_id]
+            validate_state(latest_state)
+            store.write(latest_state)
+        return {'planned': 1, 'applied': int(apply), 'conflicts': {}}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('init', 'plan', 'sync', 'resolve-equal', 'enable-deletions'))
+    parser.add_argument('command', choices=('init', 'plan', 'sync', 'resolve-equal', 'abandon-intake', 'enable-deletions'))
     parser.add_argument('--key')
+    parser.add_argument('--page-id')
     parser.add_argument('--expected-operation-id')
     parser.add_argument('--expected-revision', type=int)
     parser.add_argument('--apply', action='store_true')
@@ -954,8 +1058,16 @@ def main(argv=None):
     parser.add_argument('--verified-baselines-file', help='Private JSON in fixed config directory; independently verified by operator')
     args = parser.parse_args(argv)
     resolution_args = (args.key, args.expected_operation_id, args.expected_revision)
-    require(all(v is not None for v in resolution_args) if args.command == 'resolve-equal'
-            else all(v is None for v in resolution_args), 'resolution-options-only-and-required')
+    if args.command == 'resolve-equal':
+        require(all(v is not None for v in resolution_args) and args.page_id is None,
+                'resolution-options-only-and-required')
+    elif args.command == 'abandon-intake':
+        require(args.page_id is not None and args.expected_operation_id is not None and
+                args.key is None and args.expected_revision is None,
+                'abandon-options-only-and-required')
+    else:
+        require(all(v is None for v in resolution_args) and args.page_id is None,
+                'resolution-options-only-and-required')
     require(not (args.command == 'plan' and args.apply), 'plan-cannot-apply')
     require(args.command == 'init' or not (args.ignore_page_id or args.verified_baselines_file), 'init-options-only')
     with State(STATE_ROOT) as store:
@@ -970,6 +1082,9 @@ def main(argv=None):
         elif args.command == 'resolve-equal':
             result = resolve_equal(api, core, store, key_value=args.key,
                 expected_operation_id=args.expected_operation_id, expected_revision=args.expected_revision, apply=args.apply)
+        elif args.command == 'abandon-intake':
+            result = abandon_intake(api, core, store, page_id=args.page_id,
+                expected_operation_id=args.expected_operation_id, apply=args.apply)
         else:
             result = reconcile(api, core, store, apply=args.apply, max_actions=args.max_actions, max_new_intakes=args.max_new_intakes, max_deletes=args.max_deletes)
         print(json.dumps(result, sort_keys=True))
