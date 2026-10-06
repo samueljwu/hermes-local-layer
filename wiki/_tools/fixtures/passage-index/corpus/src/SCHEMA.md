@@ -1,0 +1,3 @@
+# Schema
+
+Authoring rules.

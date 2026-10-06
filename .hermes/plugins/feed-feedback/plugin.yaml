@@ -1,0 +1,5 @@
+name: feed-feedback
+version: 1.3.0
+description: "Discord /feedsource, /feedhealth, and /feedinterest commands for reading-feed source inspection, health, and positive exploratory-interest feedback. /feedscore was removed."
+author: "Hermes Agent"
+hooks: []

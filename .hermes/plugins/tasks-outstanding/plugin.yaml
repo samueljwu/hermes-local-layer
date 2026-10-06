@@ -1,0 +1,5 @@
+name: tasks-outstanding
+version: 1.0.0
+description: "Discord #tasks command that summarizes outstanding tasks as date, project, and description."
+author: "Hermes Agent"
+hooks: []

@@ -1,0 +1,33 @@
+{
+  "name": "wiki",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen-sidebar": "node .vitepress/gen-sidebar.mjs",
+    "gen-graph": "node .vitepress/gen-semantic-graph.mjs",
+    "gen-semantic-graph": "node .vitepress/gen-semantic-graph.mjs",
+    "semantic-lint": "node .vitepress/validate-semantic-relationships.mjs",
+    "semantic-query": "node .vitepress/semantic-query.mjs",
+    "test:semantic-relationships": "node .vitepress/test-semantic-relationships.mjs",
+    "test:semantic-stability": "node .vitepress/test-semantic-graph-stability.mjs",
+    "test:passage-search": "node .vitepress/test-passage-search.mjs",
+    "validate-links": "node .vitepress/validate-wiki-links.mjs",
+    "lint": "node .vitepress/gen-sidebar.mjs && node .vitepress/validate-wiki-links.mjs && node .vitepress/gen-semantic-graph.mjs && node .vitepress/validate-semantic-relationships.mjs && python3 _tools/wiki_ops.py opportunities",
+    "deploy-check": "python3 _tools/wiki_ops.py deploy-check",
+    "opportunities": "python3 _tools/wiki_ops.py opportunities",
+    "query-review": "python3 _tools/wiki_ops.py query-review",
+    "dev": "vitepress dev .",
+    "build": "python3 _tools/wiki_build.py",
+    "preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "d3": "^7.9.0",
+    "vitepress": "^1.6.4"
+  },
+  "dependencies": {
+    "katex": "^0.16.45",
+    "markdown-it-katex": "^2.0.3",
+    "yaml": "^2.9.1"
+  }
+}

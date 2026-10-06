@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "retrieval-eval.schema.json",
+  "title": "Wiki retrieval evaluation benchmark",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkVersion",
+    "createdDate",
+    "description",
+    "splitPolicy",
+    "statusVocabulary",
+    "questions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "benchmarkVersion": { "type": "string", "minLength": 1 },
+    "createdDate": { "type": "string", "format": "date" },
+    "description": { "type": "string", "minLength": 1 },
+    "splitPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tuning", "held-out", "counts"],
+      "properties": {
+        "tuning": { "type": "string", "minLength": 1 },
+        "held-out": { "type": "string", "minLength": 1 },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tuning", "held-out", "all"],
+          "properties": {
+            "tuning": { "type": "integer", "minimum": 1 },
+            "held-out": { "type": "integer", "minimum": 1 },
+            "all": { "type": "integer", "minimum": 30 }
+          }
+        }
+      }
+    },
+    "statusVocabulary": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "match" },
+        { "const": "partial_unsupported" },
+        { "const": "no_match" }
+      ],
+      "items": false
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 30,
+      "items": { "$ref": "#/$defs/question" }
+    }
+  },
+  "$defs": {
+    "pathList": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^src/.+\\.md$" },
+      "uniqueItems": true
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "lineRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 1 },
+        "end": { "type": "integer", "minimum": 1 },
+        "label": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "lineRanges", "lineRangeStatus", "requirement"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^src/.+\\.md$" },
+        "lineRanges": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/lineRange" }
+        },
+        "lineRangeStatus": {
+          "const": "mapped_1_indexed"
+        },
+        "requirement": { "type": "string", "minLength": 1 }
+      }
+    },
+    "facet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "supportingPages"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+        "description": { "type": "string", "minLength": 1 },
+        "supportingPages": { "$ref": "#/$defs/pathList" }
+      }
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sourceSet",
+        "split",
+        "question",
+        "expectedStatus",
+        "requiredConcepts",
+        "requiredPages",
+        "acceptableAlternativePages",
+        "requiredEvidencePassages",
+        "distractorPages",
+        "distractorTerms",
+        "dateScopeConstraints",
+        "requiredFacets",
+        "expectedEvidenceGaps",
+        "exactTerms"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "sourceSet": { "enum": ["mandatory", "additional"] },
+        "split": { "enum": ["tuning", "held-out"] },
+        "question": { "type": "string", "minLength": 1 },
+        "expectedStatus": { "enum": ["match", "partial_unsupported", "no_match"] },
+        "requiredConcepts": { "$ref": "#/$defs/stringList" },
+        "requiredPages": { "$ref": "#/$defs/pathList" },
+        "acceptableAlternativePages": { "$ref": "#/$defs/pathList" },
+        "requiredEvidencePassages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence" }
+        },
+        "distractorPages": { "$ref": "#/$defs/pathList" },
+        "distractorTerms": { "$ref": "#/$defs/stringList" },
+        "dateScopeConstraints": { "$ref": "#/$defs/stringList" },
+        "requiredFacets": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/facet" }
+        },
+        "expectedEvidenceGaps": { "$ref": "#/$defs/stringList" },
+        "exactTerms": { "$ref": "#/$defs/stringList" }
+      }
+    }
+  }
+}

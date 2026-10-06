@@ -1,0 +1,4 @@
+---
+published: nonsense
+---
+# Bad publication

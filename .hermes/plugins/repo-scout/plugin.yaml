@@ -1,0 +1,5 @@
+name: repo-scout
+version: 1.0.0
+description: "Discord /scout and /scoutfeedback commands for the #repo-scout repository discovery workflow."
+author: "Hermes Agent"
+hooks: []

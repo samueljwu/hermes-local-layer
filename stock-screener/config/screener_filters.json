@@ -1,0 +1,28 @@
+{
+  "input_path": "data/metadata/processed/filterable_universe.csv",
+  "output_path": "data/screener/filtered_universe.csv",
+  "summary_path": "data/screener/filter_summary.json",
+  "include_exchanges": ["NASDAQ", "NYSE"],
+  "exclude_symbols": [],
+  "include_symbols": [],
+  "exclude_sectors": [
+    "Finance",
+    "Real Estate",
+    "Energy"
+  ],
+  "include_sectors": [],
+  "exclude_industries": [],
+  "include_industries": [],
+  "exclude_countries": [],
+  "include_countries": ["United States"],
+  "min_market_cap": 500000000,
+  "max_market_cap": null,
+  "min_price": null,
+  "max_price": null,
+  "min_volume": null,
+  "max_volume": null,
+  "exclude_missing_metadata": true,
+  "exclude_unknown_sector": true,
+  "exclude_unknown_industry": true,
+  "exclude_unknown_country": true
+}

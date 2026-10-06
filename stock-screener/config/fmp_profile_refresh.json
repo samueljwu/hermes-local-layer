@@ -1,0 +1,13 @@
+{
+  "base_url": "https://financialmodelingprep.com/stable",
+  "universe_path": "data/universe/processed/active_universe.csv",
+  "raw_profile_dir": "data/fmp/raw/company_profile",
+  "processed_profiles_path": "data/fmp/processed/company_profiles.csv",
+  "sector_summary_path": "data/fmp/processed/sector_summary.csv",
+  "industry_summary_path": "data/fmp/processed/industry_summary.csv",
+  "metadata_path": "data/fmp/processed/profile_metadata.json",
+  "request_delay_seconds": 0.25,
+  "max_error_rate": 0.0,
+  "max_symbols": null,
+  "force_refresh": false
+}

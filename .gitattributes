@@ -1,0 +1,4 @@
+# Treat vendor/provider market data snapshots as generated data for whitespace checks.
+stock-screener/data/** -whitespace
+stock-screener/site/dist/** -whitespace
+feed/_meta/*.json -whitespace

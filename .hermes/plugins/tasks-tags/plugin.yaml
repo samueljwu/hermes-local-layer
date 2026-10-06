@@ -1,0 +1,5 @@
+name: tasks-tags
+version: 1.0.0
+description: "Discord #tasks project commands: compatibility /tags lists projects; generated project commands show tasks for that project."
+author: "Hermes Agent"
+hooks: []
