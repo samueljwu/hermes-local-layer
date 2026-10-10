@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path("/home/hermes/.hermes/scripts/backup_documentation_guard.py")
@@ -83,6 +84,11 @@ class BackupDocumentationGuardTests(unittest.TestCase):
         self.assertFalse(guard.is_trigger("wiki/src/_meta/chronology-audit.json"))
         self.assertTrue(guard.is_trigger("wiki/_tools/wiki_ops.py"))
 
+    def test_task_deletion_receipts_are_state_not_system_changes(self):
+        guard = load_guard()
+        self.assertFalse(guard.is_trigger("tasks/_meta/task_deletions.json"))
+        self.assertTrue(guard.is_trigger("tasks/_tools/task_ops.py"))
+
     def test_staged_curator_backups_pass_without_doc_update(self):
         guard = load_guard()
         with tempfile.TemporaryDirectory() as td:
@@ -98,7 +104,8 @@ class BackupDocumentationGuardTests(unittest.TestCase):
             old_repo = guard.REPO
             try:
                 setattr(guard, "REPO", repo)
-                self.assertEqual(guard.main(), 0)
+                with mock.patch("sys.argv", ["backup_documentation_guard.py"]):
+                    self.assertEqual(guard.main(), 0)
             finally:
                 setattr(guard, "REPO", old_repo)
 
@@ -108,6 +115,7 @@ class BackupDocumentationGuardTests(unittest.TestCase):
             {"id": "one", "name": "Daily", "script": "run.py", "last_run_at": None,
              "failure_streak": 0, "last_dispatch": None,
              "last_delivery_unverified": None,
+             "last_failure": None,
              "repeat": {"completed": 1, "times": None}},
         ]}
         after = {"updated_at": "later", "jobs": [
@@ -115,6 +123,7 @@ class BackupDocumentationGuardTests(unittest.TestCase):
              "failure_streak": 2,
              "last_dispatch": {"scheduled_at": "later", "kind": "on_time"},
              "last_delivery_unverified": False,
+             "last_failure": {"at": "later", "detail": "transient failure"},
              "repeat": {"completed": 2, "times": None}},
         ]}
         temporary, repo = self._cron_repo(before, after)

@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import os
 import tempfile
 import unittest
@@ -15,7 +16,7 @@ from repo_scout.cli import DEFAULT_OUT_DIR, run_scout, resolve_feedback_path, re
 from repo_scout.config import ScoutConfig, load_config
 from repo_scout.filters import has_min_commits_each_month, passes_hard_filters
 from repo_scout.feedback import load_feedback_profile, parse_feedback_args, record_feedback
-from repo_scout.github_api import GitHubClient, GitHubRateLimitError, RequestPacer, build_search_queries, search_repositories
+from repo_scout.github_api import GitHubAPIError, GitHubClient, GitHubRateLimitError, RequestPacer, build_search_queries, search_repositories
 from repo_scout.interests import build_interest_profile
 from repo_scout.ranking import rank_repo
 from repo_scout.secure_fs import open_output_directory
@@ -437,6 +438,71 @@ class RepoScoutTests(unittest.TestCase):
             self.assertEqual(calls, ["https://api.github.com/rate_limit"])
             self.assertEqual(cache_path.read_text(encoding="utf-8"), '{\n  "ok": true\n}\n')
             self.assertFalse(list(Path(td).glob("*.tmp")))
+
+    def test_github_client_retries_truncated_response_without_caching_it(self):
+        from repo_scout import github_api
+
+        class FakeResponse:
+            def __init__(self, truncated):
+                self.truncated = truncated
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                if self.truncated:
+                    raise http.client.IncompleteRead(b'{"ok":', 6)
+                return b'{"ok": true}'
+
+        with tempfile.TemporaryDirectory() as td:
+            client = GitHubClient(cache_dir=td, core_request_interval=0)
+            path = client._cache_path("https://api.github.com/repos/example/commits")
+            assert path is not None
+            calls = []
+
+            def fake_urlopen(req, timeout=30):
+                calls.append(req.full_url)
+                return FakeResponse(len(calls) == 1)
+
+            with mock.patch.object(github_api.urllib.request, "urlopen", side_effect=fake_urlopen):
+                self.assertEqual(client.get_json("/repos/example/commits"), {"ok": True})
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(client.get_json("/repos/example/commits"), {"ok": True})
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(path.exists())
+
+    def test_github_client_reports_repeated_truncation_without_cache(self):
+        from repo_scout import github_api
+
+        class TruncatedResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                raise http.client.IncompleteRead(b'{"ok":', 6)
+
+        with tempfile.TemporaryDirectory() as td:
+            client = GitHubClient(cache_dir=td, core_request_interval=0)
+            calls = []
+
+            def fake_urlopen(req, timeout=30):
+                calls.append(req.full_url)
+                return TruncatedResponse()
+
+            with mock.patch.object(github_api.urllib.request, "urlopen", side_effect=fake_urlopen):
+                with self.assertRaises(GitHubAPIError) as caught:
+                    client.get_json("/repos/example/commits")
+            self.assertEqual(caught.exception.reason, "Incomplete response")
+            self.assertEqual(len(calls), 2)
+            path = client._cache_path(calls[0])
+            assert path is not None
+            self.assertFalse(path.exists())
 
     def test_github_client_cache_paths_do_not_collide_on_long_query_suffixes(self):
         with tempfile.TemporaryDirectory() as td:

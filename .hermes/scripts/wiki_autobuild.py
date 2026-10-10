@@ -24,19 +24,13 @@ LOG_FILE = HOME / ".hermes" / "logs" / "wiki-autobuild.log"
 
 WATCH_PATHS = [
     WIKI / "src",
+    WIKI / "public",
     WIKI / "package.json",
     WIKI / "package-lock.json",
-    WIKI / ".vitepress" / "config.ts",
-    WIKI / ".vitepress" / "gen-sidebar.mjs",
-    WIKI / ".vitepress" / "gen-graph-data.mjs",
-    WIKI / ".vitepress" / "validate-wiki-links.mjs",
-    WIKI / ".vitepress" / "plugins",
-    WIKI / ".vitepress" / "theme",
+    WIKI / ".vitepress",
+    WIKI / "_tools",
+    WIKI / "_meta" / "ingestion",
 ]
-
-SKIP_DIRS = {"node_modules", "dist", ".cache", "cache"}
-SKIP_SUFFIXES = {".swp", ".tmp", "~"}
-
 
 def iter_files(path: Path):
     if not path.exists():
@@ -45,9 +39,9 @@ def iter_files(path: Path):
         yield path
         return
     for child in sorted(path.rglob("*")):
-        if any(part in SKIP_DIRS for part in child.parts):
-            continue
-        if child.is_file() and not any(str(child).endswith(s) for s in SKIP_SUFFIXES):
+        # Watch roots already exclude installed deps/dist. Unknown nested names
+        # remain protected; snapshot applies only the gate's exact exclusions.
+        if child.is_file():
             yield child
 
 
@@ -60,12 +54,16 @@ def file_digest(path: Path) -> str:
 
 
 def snapshot() -> dict:
+    tools = str(WIKI / "_tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    from ingestion_gate import generated, bytecode_cache
     files = []
     seen = set()
     for watch_path in WATCH_PATHS:
         for path in iter_files(watch_path) or []:
             rel = path.relative_to(WIKI).as_posix()
-            if rel in seen:
+            if rel in seen or generated(rel) or bytecode_cache(rel):
                 continue
             seen.add(rel)
             st = path.stat()
@@ -168,6 +166,11 @@ def main() -> int:
     if rc == 0:
         save_state(snap, "ok")
         print("[wiki-autobuild] Build complete", flush=True)
+    elif rc == 2:
+        # The new release is visible; retain a warning status rather than lie
+        # that publication failed or loop on an identical already-published input.
+        save_state(snap, "published-warning")
+        print(f"[wiki-autobuild] Published with durability/cleanup warning; see {LOG_FILE}", file=sys.stderr, flush=True)
     else:
         print(f"[wiki-autobuild] Build failed with exit code {rc}; see {LOG_FILE}", file=sys.stderr, flush=True)
     return rc

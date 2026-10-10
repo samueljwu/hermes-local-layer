@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import stat
@@ -339,6 +340,16 @@ class GitHubClient:
                 raise GitHubAPIError(**payload) from err
             except urllib.error.URLError as err:
                 raise GitHubAPIError(status=None, reason="URL error", url=url, message=str(err.reason)) from err
+            except http.client.IncompleteRead as err:
+                # A truncated GitHub response is not valid JSON and must never be
+                # cached. Retry the same read-only GET once before reporting it.
+                if attempts == 1:
+                    continue
+                raise GitHubAPIError(
+                    status=None, reason="Incomplete response", url=url,
+                    message="GitHub response ended before its declared length",
+                    request_kind=kind,
+                ) from err
         if cache_path:
             _atomic_write_json(cache_path, data, self.cache_directory)
         return data
