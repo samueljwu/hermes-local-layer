@@ -49,7 +49,7 @@ Optional reads:
 - `search_pages_per_query`: GitHub Search API pages fetched for each generated query. Increase only with a token.
 - `max_api_repos_for_commit_check`: safety cap for expensive per-repo checks.
 - `shortlist_size`: max final ranked repos.
-- `cache_ttl_hours`: GitHub GET cache time.
+- `cache_ttl_hours`: GitHub GET cache freshness and live-scan retention window. Live scans prune expired immediate regular `.json` responses only in the selected `_cache/`, under the canonical output lock and through verified directory descriptors. Dry runs do not prune; no recursive deletion or symlink traversal occurs.
 - `feedback_path` is not a YAML config field; pass feedback explicitly with CLI `--feedback feedback.jsonl` (resolved under the canonical `out/` tree) or use the Discord plugin defaults.
 - `allowed_licenses`: SPDX IDs allowed. Empty list means no license filter.
 - `contribution_labels`: issue labels that suggest approachable contributions.

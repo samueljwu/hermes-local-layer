@@ -9,6 +9,7 @@
     "gen-semantic-graph": "node .vitepress/gen-semantic-graph.mjs",
     "semantic-lint": "node .vitepress/validate-semantic-relationships.mjs",
     "semantic-query": "node .vitepress/semantic-query.mjs",
+    "test:graph-ui": "node --test .vitepress/test-graph-view-model.mjs",
     "test:semantic-relationships": "node .vitepress/test-semantic-relationships.mjs",
     "test:semantic-stability": "node .vitepress/test-semantic-graph-stability.mjs",
     "test:passage-search": "node .vitepress/test-passage-search.mjs",

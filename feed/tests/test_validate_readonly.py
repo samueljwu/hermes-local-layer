@@ -11,12 +11,19 @@ FEED_OPS = Path(__file__).resolve().parents[1] / "_tools" / "feed_ops.py"
 
 def load_feed_ops(root: Path):
     old = os.environ.get("HERMES_FEED_ROOT")
-    os.environ["HERMES_FEED_ROOT"] = str(root)
+    os.environ.pop("HERMES_FEED_ROOT", None)
     try:
         spec = importlib.util.spec_from_file_location("feed_ops_readonly_test", FEED_OPS)
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        # Bind synthetic fixtures directly; TMPDIR may be outside /tmp.
+        # Do not broaden production's environment-override write boundary.
+        module.BASE = root
+        module.META = root / '_meta'
+        module.RUNS = root / 'runs'
+        module.LOCK_PATH = root / '.feed_ops.lock'
+        module.ALLOWED_WRITE_ROOT = root.resolve()
         return module
     finally:
         if old is None:

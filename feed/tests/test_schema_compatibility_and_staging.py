@@ -50,12 +50,20 @@ def test_optional_registry_values_still_reject_bad_types(ops, metadata):
             'allowed_candidate_sources': [dict(name='Fixture', endpoint='https://example.org/feed', **metadata)]})
 
 
-@pytest.mark.parametrize('failure', ['history', 'contamination', 'profile', 'source_state', None])
+@pytest.mark.parametrize('failure', ['history', 'contamination', 'transient_churn', 'profile', 'source_state', None])
 def test_digest_validates_all_staged_state_before_any_write(ops, monkeypatch, failure):
     before = {p: p.read_bytes() for p in ops.BASE.rglob('*') if p.is_file()}
-    snapshots = iter([{}, {'changed': {'file': 'hash'}} if failure == 'contamination' else {}])
+    snapshots = iter([{}, {'changed': {'file': 'hash'}}] * 2 if failure == 'contamination'
+                     else [{}, {'changed': {'file': 'hash'}}, {}, {}] if failure == 'transient_churn'
+                     else [{}, {}])
     monkeypatch.setattr(ops, 'protected_snapshot', lambda: next(snapshots))
-    monkeypatch.setattr(ops, 'collect_signals', lambda: {'signals': []})
+    signal_reads = []
+    def collect():
+        # A restarted attempt must reread signals before any canonical promotion.
+        assert before == {p: p.read_bytes() for p in ops.BASE.rglob('*') if p.is_file()}
+        signal_reads.append(True)
+        return {'signals': []}
+    monkeypatch.setattr(ops, 'collect_signals', collect)
     real_build = ops.build_profile
     def build(*args, **kwargs):
         profile = real_build(*args, **kwargs)
@@ -79,7 +87,7 @@ def test_digest_validates_all_staged_state_before_any_write(ops, monkeypatch, fa
         OUTPUT_PATH = ops.BASE / 'page.html'
         atomic_write_text = staticmethod(ops.write_text)
     monkeypatch.setattr(ops, 'prepare_feed_page', lambda history: (Page, '<html>fixture</html>'))
-    if failure:
+    if failure and failure != 'transient_churn':
         with pytest.raises((ValueError, RuntimeError)):
             ops.digest()
         assert before == {p: p.read_bytes() for p in ops.BASE.rglob('*') if p.is_file()}
@@ -89,6 +97,7 @@ def test_digest_validates_all_staged_state_before_any_write(ops, monkeypatch, fa
         assert (ops.BASE / 'page.html').read_text() == '<html>fixture</html>'
         assert len(ops.load_json(ops.META / 'recommendation_history.json', [])) == 5
         assert ops.load_json(ops.META / 'candidates.json', None) == []
+    assert len(signal_reads) == (2 if failure in ('contamination', 'transient_churn') else 1)
 
 
 @pytest.mark.parametrize('operation', ['page', 'report'])

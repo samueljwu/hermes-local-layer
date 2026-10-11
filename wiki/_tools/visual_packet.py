@@ -6,6 +6,7 @@ strips. Full-page previews are context only. No network/model/core settings.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import io
 from pathlib import Path
 import shutil
@@ -90,6 +91,40 @@ def _source_pages(manifest):
              'stored_dpi': p['dpi'], 'rotation': p['rotation'], 'kind': manifest['kind']} for p in manifest['pages']]
 
 
+@contextmanager
+def _page_reader(root, manifest):
+    """One decoded source page per operation, released before any page switch.
+
+    Consecutive tiles share a decode, not validation or approval. Arbitrary region
+    order is preserved; revisiting a page reopens it. The existing per-raster
+    pixel limit bounds this working page. No encoded source buffer is retained.
+    """
+    _, Image, _ = ve._deps()
+    current, image = None, None
+
+    def read(number):
+        nonlocal current, image
+        if number != current:
+            if image is not None:
+                image.close()
+                image = None
+            current = None
+            page = manifest['pages'][number - 1]
+            ve._pixel_budget(page['width'], page['height'])
+            with io.BytesIO(ve._read(root, page['render']['path'])) as stream:
+                image = Image.open(stream)
+                image.load()
+            current = number
+        assert image is not None
+        return image
+
+    try:
+        yield read
+    finally:
+        if image is not None:
+            image.close()
+
+
 def prepare_packet(manifest_path, output, regions, *, max_edge=MAX_EDGE, overlap=64,
                    max_image_bytes=2 * 1024 * 1024, max_batch_bytes=8 * 1024 * 1024, max_images=8):
     """All-page context plus explicit risky regions; existing evidence is unchanged.
@@ -151,9 +186,9 @@ def prepare_packet(manifest_path, output, regions, *, max_edge=MAX_EDGE, overlap
                 finally:
                     preview.close()
 
-        for number, dimensions, mappings, label, basis in _detail_plan(manifest, regions, max_edge, overlap):
-            page = manifest['pages'][number - 1]
-            with Image.open(io.BytesIO(ve._read(root, page['render']['path']))) as stored:
+        with _page_reader(root, manifest) as read_page:
+            for number, dimensions, mappings, label, basis in _detail_plan(manifest, regions, max_edge, overlap):
+                stored = read_page(number)
                 with Image.new('RGB', tuple(dimensions), 'white') as payload:
                     for mapping in mappings:
                         with stored.crop(mapping['source_bbox']).convert('RGB') as clipped:
@@ -332,9 +367,9 @@ def _validate_fidelity(packet, root, source_root, manifest):
                     'source_bbox': [0, 0, *stored.size], 'payload_bbox': [0, 0, *preview.size],
                     'transformation': 'context-only-resize', 'scale': [preview.width / stored.width, preview.height / stored.height]}]
                 check(preview, 'full-page-context-only', page['page'], mappings)
-    for number, dimensions, mappings, label, basis in _detail_plan(manifest, packet['regions'], edge, packet['overlap']):
-        page = manifest['pages'][number - 1]
-        with Image.open(io.BytesIO(ve._read(source_root, page['render']['path']))) as stored:
+    with _page_reader(source_root, manifest) as read_page:
+        for number, dimensions, mappings, label, basis in _detail_plan(manifest, packet['regions'], edge, packet['overlap']):
+            stored = read_page(number)
             with Image.new('RGB', tuple(dimensions), 'white') as expected:
                 for mapping in mappings:
                     with stored.crop(mapping['source_bbox']).convert('RGB') as clipped:

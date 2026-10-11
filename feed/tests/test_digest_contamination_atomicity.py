@@ -29,7 +29,7 @@ def test_contamination_failure_happens_before_canonical_output_promotion(monkeyp
         }
         for slot in range(1, 6)
     ]
-    snapshots = iter([{'protected': {'before': (1, 'a')}}, {'protected': {'after': (1, 'b')}}])
+    snapshots = iter([{'protected': {'before': (1, 'a')}}, {'protected': {'after': (1, 'b')}}] * 2)
     writes: list[str] = []
 
     monkeypatch.setattr(feed_ops, 'validate', lambda: [])

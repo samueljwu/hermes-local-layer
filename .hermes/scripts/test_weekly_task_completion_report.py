@@ -163,6 +163,42 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
                                    "tag": "Recurring", "notes": "Canonical recurring notes",
                                    "est_time": 1}])
 
+    def test_rank_changes_and_legacy_ids_do_not_duplicate_completion(self):
+        log = ("## 2026-10-11\n"
+               "- **T-1-264** — Paper — completed\n"
+               "- **T-2-264** — Paper — completed\n"
+               "- **T264** — Paper — completed\n")
+        rows = report.parse_completed_log(log, date(2026, 10, 5), date(2026, 10, 11))
+        self.assertEqual(len(rows), 1)
+
+    def test_first_completion_wins_before_report_window_filter(self):
+        log = ("## 2026-10-11\n- **T-1-264** — Renamed — completed\n"
+               "## 2026-07-01\n- **T-2-264** — Original — completed\n")
+        self.assertEqual(report.parse_completed_log(
+            log, date(2026, 10, 5), date(2026, 10, 11)), [])
+        rows = report.parse_completed_log(log, date(2026, 7, 1), date(2026, 10, 11))
+        self.assertEqual([(r['date'], r['task']) for r in rows], [(date(2026, 7, 1), 'Original')])
+
+    def test_distinct_tasks_with_same_title_and_recurring_occurrences_are_preserved(self):
+        log = ("## 2026-10-11\n"
+               "- **T-1-264** — Paper — completed\n"
+               "- **T-2-265** — Paper — completed\n"
+               "- **T-3-7** — Rent — completed occurrence\n"
+               "## 2026-10-10\n- **T-4-7** — Rent — completed occurrence\n")
+        rows = report.parse_completed_log(log, date(2026, 10, 5), date(2026, 10, 11))
+        self.assertEqual(len(rows), 4)
+
+    def test_duplicate_completion_does_not_inflate_estimated_hours(self):
+        registry = [{"id": "T-1-264", "name": "Paper", "done": True,
+                     "project_id": "P-1", "notes": "", "est_time": 2.5,
+                     "due_date": None, "reminder": None, "recurrence": None, "priority": "medium"}]
+        rows = report.build_completion_records(
+            "## 2026-10-11\n- **T-1-264** — Paper — completed\n"
+            "- **T-2-264** — Paper — completed\n",
+            registry, date(2026, 10, 5), date(2026, 10, 11),
+            projects=[{"id": "P-1", "name": "IndStudy"}])
+        self.assertEqual(sum(r['est_time'] for r in rows), 2.5)
+
     def test_completion_records_use_est_time_and_default_null_or_missing_to_one_hour(self):
         base = {"name": "Task", "done": True, "project_id": "P-1", "notes": "",
                 "due_date": None, "reminder": None, "recurrence": None, "priority": "medium"}

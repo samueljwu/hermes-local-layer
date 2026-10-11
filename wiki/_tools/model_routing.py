@@ -267,15 +267,36 @@ class CodexTransport:
                   and request['adapter_version'] == adapter_version(self.runtime_root),
                   'request provider/adapter pin mismatch')
         data = json.loads(request['messages'][1]['content'])
-        images, planned = [], []
-        for visual in data['visuals']:
-            packet = json.loads(read_blob(visual['packet_sha256']))
-            for batch, ids in enumerate(packet['batches']):
+        # Packet batches are tool scheduling, not supported multi-call review.
+        # Refuse the COMPLETE request envelope before loading any image blobs.
+        # Never send a prefix or manufacture a cross-section review from batches.
+        plans, count, byte_count = [], 0, 0
+        try:
+            for visual in data['visuals']:
+                packet = json.loads(read_blob(visual['packet_sha256']))
                 indexed = {i['id']: i for i in packet['items']}
+                ordered = [ident for ids in packet['batches'] for ident in ids]
+                gate.need(len(indexed) == len(packet['items']) and ordered == list(indexed),
+                          'complete ordered packet coverage required')
+                for item in packet['items']:
+                    orchestration.integer(item['encoded_bytes'], 1, WIRE_LIMITS['max_image_bytes'], 'image bytes')
+                    dimensions = item['intended_dimensions']
+                    gate.need(isinstance(dimensions, list) and len(dimensions) == 2,
+                              'image dimensions required')
+                    for dimension in dimensions:
+                        orchestration.integer(dimension, 1, WIRE_LIMITS['max_edge'], 'image dimension')
+                    count += 1
+                    byte_count += item['encoded_bytes']
+                    gate.need(count <= WIRE_LIMITS['max_images'] and byte_count <= WIRE_LIMITS['max_batch_bytes'],
+                              'complete request exceeds image envelope; leave pending')
+                plans.append((visual, packet, indexed))
+        except (gate.GateError, KeyError, TypeError, ValueError):
+            raise orchestration.AdapterNotSent('local image envelope preflight refused') from None
+        images = []
+        for visual, packet, indexed in plans:
+            for ids in packet['batches']:
                 for ident in ids:
-                    item = indexed[ident]
-                    planned.append((visual, packet, batch, item))
-                    images.append(read_blob(item['sha256']))
+                    images.append(read_blob(indexed[ident]['sha256']))
         # Caller must pin genuine prior independent inspection; never infer it
         # from source/model assertions, dimensions or hashes.
         pins = getattr(self, 'readable_hashes', ())
@@ -291,8 +312,7 @@ class CodexTransport:
         gate.need(response['route'] == request['route'], 'actual requested route mismatch')
         deliveries, delivered = [], {}
         cursor = 0
-        for visual in data['visuals']:
-            packet = json.loads(read_blob(visual['packet_sha256']))
+        for visual, packet, indexed in plans:
             for batch, ids in enumerate(packet['batches']):
                 rows = []
                 for ident in ids:

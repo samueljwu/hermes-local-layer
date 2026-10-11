@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import ScoutConfig, load_config
+from .cache_retention import prune_expired_responses
 from .filters import has_min_commits_each_month, passes_hard_filters
 from .github_api import GitHubAPIError, GitHubClient, fetch_contribution_labels, fetch_recent_commit_dates, search_repositories
 from .feedback import load_feedback_profile
@@ -101,6 +102,11 @@ def _run_scout_locked(config_path: Path, out_dir: Path, dry_run: bool = False, f
             }
             _write_json(out_dir / "dry_run.json", result, secure_dir)
             return result
+
+        # Live runs already own the canonical output lock. Remove only expired
+        # responses in this run's selected cache; dry runs remain non-pruning.
+        if cache_secure_dir is not None:
+            prune_expired_responses(cache_secure_dir, cfg.cache_ttl_hours * 3600)
 
         now = datetime.now(timezone.utc)
         counts = {"candidates": 0, "hard_filtered": 0, "activity_validated": 0, "shortlisted": 0}

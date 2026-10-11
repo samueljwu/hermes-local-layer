@@ -31,6 +31,8 @@ The feed must never write to, patch, rebuild, append logs to, or mutate:
 
 Digest runs snapshot protected systems before and after generation using content hashes, not mtimes, so mtime-only rewrites do not fail the run. The snapshot intentionally excludes regenerated wiki semantic build artifacts under `/home/hermes/wiki/src/_meta/semantic/` except durable curation files such as `accepted-edges.json` and `rejected-edges.json`; wiki builds can rewrite the generated graph/lint/state files with timestamp churn while the feed is running, and those derived files are not canonical wiki knowledge. Digest text, replacement history, and page HTML are staged in memory; the run file, recommendation history, public page, and log are promoted only after the protected comparison passes.
 
+Protected input changes raise a distinct pre-publication error. `digest` discards the failed attempt's staged state and retries the full generation once, rereading signals and taking a fresh protected snapshot. The second attempt must pass the same guard; persistent changes fail without promoting any canonical output. Validation, fetching/selection and publication errors are not retried. Diagnostics use stderr so delivered stdout remains only the briefing. This accommodates legitimate concurrent edits without exempting task files or relaxing anti-contamination checks.
+
 If a user wants a recommendation ingested into wiki, captured in journal, or converted to a task, that is a separate explicit workflow and must switch to the relevant skill.
 
 ## Task Registry Signals

@@ -22,6 +22,8 @@ export default defineConfig({
   },
 
   head: [
+    ['link', { rel: 'stylesheet', href: '/assets/typography.css?v=1' }],
+    ['link', { rel: 'stylesheet', href: '/assets/layout.css?v=2' }],
     ['link', { rel: 'stylesheet', href: '/wiki/assets/katex.min.css' }],
     ['link', { rel: 'icon', href: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">📚</text></svg>' }],
   ],

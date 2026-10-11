@@ -319,14 +319,30 @@ def parse_completed_log(text: str, start: date, end: date) -> list[dict]:
             active_date = date.fromisoformat(dm.group(1))
             continue
         em = entry_re.match(line)
-        if em and active_date and start <= active_date <= end:
+        if em and active_date and active_date <= end:
             records.append({
                 "date": active_date,
                 "id": em.group("id"),
                 "task": em.group("task"),
                 "status": em.group("status"),
             })
-    return records
+    # Ordinary tasks are work items, not checkbox transitions. Use the permanent
+    # creation suffix, never the mutable due-rank or title. Select the earliest
+    # completion across the full history BEFORE filtering the report window so
+    # reopening/reclosing cannot count the same work again in a later week.
+    first_completion = {}
+    for index, record in enumerate(records):
+        if record["status"] == "completed":
+            identity = creation_number(record["id"])
+            candidate = (record["date"], index)
+            if identity not in first_completion or candidate < first_completion[identity]:
+                first_completion[identity] = candidate
+    return [
+        record for index, record in enumerate(records)
+        if start <= record["date"] <= end
+        and (record["status"] == "completed occurrence"
+             or first_completion[creation_number(record["id"])] == (record["date"], index))
+    ]
 
 
 def build_completion_records(
