@@ -53,6 +53,27 @@ class BackupDocumentationGuardTests(unittest.TestCase):
         guard = load_guard()
         self.assertTrue(guard.is_generated("pdf_audit_extract.json"))
 
+    def test_cleanup_recovery_root_is_known_but_similar_unknown_root_is_blocked(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "hermes_cleanup_manifests").mkdir()
+            (repo / "hermes_cleanup_manifests_other").mkdir()
+            with mock.patch.object(guard, "REPO", repo):
+                self.assertEqual(guard.unknown_top_level_directories(), ["hermes_cleanup_manifests_other"])
+
+    def test_cleanup_recovery_files_are_included_in_private_backup(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / ".gitignore").write_text(Path("/home/hermes/.gitignore").read_text(), encoding="utf-8")
+            paths = ["hermes_cleanup_manifests/wiki-20261011/manifest.json",
+                     "hermes_cleanup_manifests/wiki-20261011/preserved/recovery-copy"]
+            for path in paths:
+                result = subprocess.run(["git", "check-ignore", "-q", path], cwd=repo,
+                                        text=True, capture_output=True, check=False)
+                self.assertEqual(result.returncode, 1)
+
     def _cron_repo(self, before: dict, after: dict):
         import json
         temporary = tempfile.TemporaryDirectory()

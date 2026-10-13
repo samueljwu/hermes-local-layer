@@ -54,6 +54,10 @@ pdf_audit_contact_sheets/**
 pdf_audit_text/
 pdf_audit_text/**
 pdf_audit_extract.json
+# Reviewed cleanup receipts and unique preserved recovery copies are durable
+# private recovery data. Content still must pass the credential scan.
+!hermes_cleanup_manifests/
+!hermes_cleanup_manifests/**
 stock-screener/.env
 stock-screener/.env.*
 stock-screener/**/*secret*
@@ -92,6 +96,10 @@ repo-scout/*.egg-info/
 .hermes/memories/*.lock
 .hermes/skills/.usage.json*
 .hermes/skills/.curator_state
+# Generated hub indexes are rebuildable; active and archived skills and curator
+# rollback snapshots remain private backup payload subject to credential scans.
+/.hermes/skills/.hub/
+/.hermes/skills/.hub/**
 .hermes/skills/**/*.lock
 
 # Never commit secrets, auth, live config, live state, logs, caches, or transcripts
@@ -155,6 +163,10 @@ tasks/_tools/test_google_calendar_sync.py
 # below broad !wiki/** so durable reviewed assets must live under wiki/src/.
 /wiki/.tmp/
 /wiki/.tmp/**
+# Local rollout review copies, logs and nested evidence bundles are private
+# working material, not canonical wiki sources or durable backup payload.
+/wiki/.ingestion-rollout/
+/wiki/.ingestion-rollout/**
 /pdf_audit_extract.json
 
 # Do not vendor Hermes source install or nested Home Assistant checkout.

@@ -50,6 +50,7 @@ BLOCKED_PATH_RE = re.compile(
     r"(^|/)("
     r"projects/|"
     r"\.hermes/plugins/homeassistant(?:/|$)|"
+    r"^\.hermes/skills/\.hub(?:/|$)|"
     r"notion-integration-review/|"
     r"pdf_audit_extract\.json$|"
     r"\.env(?:\..*)?$|"
@@ -59,7 +60,8 @@ BLOCKED_PATH_RE = re.compile(
     r"application_default_credentials|service[-_]?account.*|.*google.*credential.*|"
     r".*google.*token.*)\.json$|"
     r"hermes-tasks-calendar/|\.config/gcloud/|"
-    r"wiki/\.tmp/|"
+    r"wiki/(?:\.tmp|\.ingestion-rollout)/|"
+
     r".*authorization[-_]response.*|.*oauth[-_]callback.*|"
     r"config\.yaml(?:\.bak.*)?$|"
     r"\.hermes/config\.yaml(?:\.bak.*)?$|"
@@ -116,6 +118,9 @@ ALLOW_FALSE_POSITIVE_PATHS = {
 ALLOW_SECRET_VALUE_PREFIXES: dict[str, tuple[tuple[str, str], ...]] = {
     "openai_key": (
         ("wiki/", "sk-hynix-"),
+        # Cleanup recovery objects contain byte-identical historical wiki
+        # output/source copies with the same public company/source slugs.
+        ("hermes_cleanup_manifests/", "sk-hynix-"),
         ("feed/_meta/candidates.json", "sk-telecom-"),
     ),
 }

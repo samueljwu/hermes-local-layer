@@ -23,6 +23,36 @@ def load_harness():
 
 
 class BackupSecurityHarnessTests(unittest.TestCase):
+    def test_private_recovery_and_public_filtering_have_separate_policies(self):
+        harness = load_harness()
+        for path in ['wiki/.ingestion-rollout/lane/evidence.zip',
+                     'wiki/.ingestion-rollout/lane/copied-source.md',
+                     '.hermes/skills/.hub/index-cache/index.json']:
+            self.assertTrue(harness.path_is_blocked(path))
+            result = subprocess.run(['git', 'check-ignore', '--no-index', '-q', path],
+                                    cwd=Path('/home/hermes'), check=False)
+            self.assertEqual(result.returncode, 0)
+        self.assertFalse(harness.path_is_blocked('wiki/src/raw/assets/original.pdf'))
+        self.assertFalse(harness.path_is_blocked('wiki/_tools/ingestion_gate.py'))
+        for path in ['wiki/src/raw/assets/original.pdf', 'wiki/_tools/ingestion_gate.py',
+                     'wiki/_meta/ingestion/records/receipt.json', '.hermes/skills/devops/example/SKILL.md',
+                     '.hermes/skills/.archive/old/reference.md',
+                     '.hermes/skills/.curator_backups/old/skills.tar.gz',
+                     'hermes_cleanup_manifests/wiki/preserved/recovery-copy']:
+            result = subprocess.run(['git', 'check-ignore', '--no-index', '-q', path],
+                                    cwd=Path('/home/hermes'), check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(harness.path_is_blocked(path))
+
+    def test_recovery_company_slugs_do_not_exempt_real_keys(self):
+        harness = load_harness()
+        path = 'hermes_cleanup_manifests/wiki/preserved/recovery-copy'
+        self.assertTrue(harness.allowed_secret_value_false_positive(path, 'openai_key',
+                                                                   'sk-' + 'hynix-public-source-slug-with-long-title'))
+        self.assertFalse(harness.allowed_secret_value_false_positive(path, 'openai_key', 'sk-' + 'A' * 40))
+        self.assertTrue(harness.path_is_blocked('hermes_cleanup_manifests/old/.env'))
+        self.assertTrue(harness.path_is_blocked('.hermes/skills/.archive/old/auth.json'))
+
     def test_blocks_generated_wiki_tmp_tree(self):
         harness = load_harness()
         self.assertTrue(harness.path_is_blocked('wiki/.tmp/extracted.txt'))
