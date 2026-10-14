@@ -162,7 +162,7 @@ def main() -> int:
     if rc == 75:
         if args.verbose:
             print("[wiki-autobuild] Build already running; leaving state dirty for the next hook")
-        return 0
+        return 75
     if rc == 0:
         save_state(snap, "ok")
         print("[wiki-autobuild] Build complete", flush=True)

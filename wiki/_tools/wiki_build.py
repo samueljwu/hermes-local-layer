@@ -110,7 +110,6 @@ def promote(staging: Path) -> None:
 def require_unchanged(expected: dict[str, str]) -> None:
     actual = gate.inventory(WIKI_ROOT, build_inputs=True)
     gate.need(actual == expected, "canonical build inputs changed during build; retry only after review/merge")
-    gate.assert_publishable(WIKI_ROOT)
 
 
 @contextlib.contextmanager
@@ -122,7 +121,8 @@ def source_snapshot(expected: dict[str, str]):
             source = WIKI_ROOT / name
             if source.exists():
                 shutil.copytree(source, directory / name, ignore=lambda parent, names: [
-                    name for name in names if gate.bytecode_cache((Path(parent) / name).relative_to(WIKI_ROOT).as_posix())])
+                    name for name in names if gate.bytecode_cache((Path(parent) / name).relative_to(WIKI_ROOT).as_posix())
+                    or (name == 'originals' and Path(parent) == WIKI_ROOT / '_meta/ingestion')])
         for name in ("package.json", "package-lock.json"):
             if (WIKI_ROOT / name).exists():
                 shutil.copy2(WIKI_ROOT / name, directory / name)
@@ -150,12 +150,96 @@ def sync_generated(snapshot: Path) -> None:
         gate.atomic_write(gate.safe_path(WIKI_ROOT, rel, missing=True), (snapshot / rel).read_bytes())
 
 
+def validate_public_asset_aliases(root: Path, staging: Path, expected: dict, aliases: dict) -> dict:
+    """Exact admitted source/bytes/rendered-path contract, never a hash allowlist."""
+    import json
+    from html.parser import HTMLParser
+    from urllib.parse import unquote, urlsplit
+    gate.need(isinstance(aliases, dict), 'invalid compiler asset aliases')
+    if not aliases:
+        return {}
+    image_paths = set()
+
+    class ImageLinks(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag != 'img':
+                return
+            url = urlsplit(dict(attrs).get('src') or '')
+            if not url.scheme and not url.netloc and url.path.startswith('/wiki/'):
+                image_paths.add(unquote(url.path.removeprefix('/wiki/')))
+
+    for html in staging.rglob('*.html'):
+        rel = html.relative_to(staging).as_posix()
+        ImageLinks().feed(gate.safe_path(staging, rel).read_text(encoding='utf-8'))
+    pins = {}
+    for alias, entry in aliases.items():
+        gate.relpath(alias)
+        gate.need(alias.startswith('assets/') and alias in image_paths,
+                  'compiler alias not a current rendered image')
+        gate.need(isinstance(entry, dict) and set(entry) == {'source', 'sha256'}, 'invalid compiler asset entry')
+        source, pin = entry['source'], entry['sha256']
+        gate.relpath(source)
+        gate.need(source.startswith(('src/raw/assets/', 'public/')) and expected.get(source) == pin
+                  and gate.is_hash(pin), 'compiler alias source not admitted')
+        data = gate.safe_path(root, source).read_bytes()
+        gate.need(gate.sha(data) == pin and gate.sha(gate.safe_path(staging, alias).read_bytes()) == pin,
+                  'compiler alias exact bytes mismatch')
+        # An image alias must never launder structured private controls, including
+        # arbitrary field names, even if somebody admits the same bytes publicly.
+        try:
+            value = json.loads(data, object_pairs_hook=gate.unique_object)
+        except (gate.GateError, ValueError, UnicodeError):
+            value = None
+        gate.need(not isinstance(value, (dict, list)), 'structured compiler asset forbidden')
+        pins[alias] = pin
+    return pins
+
+
+def capture_public_asset_aliases(root: Path, staging: Path, expected: dict) -> dict:
+    """Consume Vite's native client manifest BEFORE the atomic release promotion.
+
+    VitePress sets Vite root to srcDir; native source keys are relative to src.
+    Full module/dependency metadata stays private, never in the served release.
+    """
+    native_path = gate.safe_path(staging, '.vite/manifest.json')
+    native = gate.read_json(native_path)
+    gate.need(isinstance(native, dict), 'invalid native compiler manifest')
+    referenced = {asset for entry in native.values() if isinstance(entry, dict)
+                  for asset in entry.get('assets', [])}
+    aliases = {}
+    for key, entry in native.items():
+        if key.startswith('raw/assets/'):
+            source = 'src/' + key
+        elif key.startswith('../public/'):
+            source = 'public/' + key.removeprefix('../public/')
+        else:
+            continue
+        gate.relpath(source)
+        gate.need(source in expected and isinstance(entry, dict), 'native asset source outside frozen inventory')
+        alias = entry.get('file')
+        # Compiled Markdown modules are documents, not copied image aliases.
+        if source.endswith('.md') and isinstance(alias, str) and alias.endswith('.js'):
+            continue
+        gate.need(alias in referenced, 'unreferenced native compiler asset')
+        proof = {'source': source, 'sha256': expected[source]}
+        # Vite can deduplicate identical admitted sources to one output asset.
+        if alias not in aliases:
+            aliases[alias] = proof
+        else:
+            gate.need(aliases[alias]['sha256'] == proof['sha256'], 'conflicting native compiler assets')
+    validate_public_asset_aliases(root, staging, expected, aliases)
+    native_path.unlink()
+    native_path.parent.rmdir()
+    return aliases
+
+
 def build() -> None:
     admission = gate.assert_publishable(WIKI_ROOT)
     expected = gate.inventory(WIKI_ROOT, build_inputs=True)
+    prior_manifest = WIKI_ROOT / 'dist/release-manifest.json'
+    previous = gate.read_json(gate.safe_path(WIKI_ROOT, 'dist/release-manifest.json')).get('input_inventory', {}) if prior_manifest.exists() else {}
     with source_snapshot(expected) as snapshot:
-        gate.assert_publishable(snapshot)
-        run([sys.executable, "-B", "_tools/wiki_ops.py", "chronology-audit"], snapshot)
+        gate.assert_publishable(snapshot, private_root=WIKI_ROOT, previous_inventory=previous)
         fonts = snapshot / "public/assets/fonts"
         fonts.mkdir(parents=True, exist_ok=True)
         shutil.copy2(snapshot / "node_modules/katex/dist/katex.min.css", snapshot / "public/assets/katex.min.css")
@@ -166,20 +250,31 @@ def build() -> None:
         run(["node", ".vitepress/validate-wiki-links.mjs"], snapshot)
         run(["node", ".vitepress/gen-semantic-graph.mjs"], snapshot)
         run(["node", ".vitepress/validate-semantic-relationships.mjs"], snapshot)
-        run([sys.executable, "-B", "_tools/wiki_ops.py", "validate"], snapshot)
+        validation_cmd = [sys.executable, "-B", "_tools/wiki_ops.py", "validate"]
+        if (WIKI_ROOT / '.private-sources').exists():
+            validation_cmd.extend(["--private-root", str(WIKI_ROOT)])
+        run(validation_cmd, snapshot)
         staging = snapshot / "dist"
         run([str(snapshot / "node_modules/.bin/vitepress"), "build", ".", "--outDir", str(staging)], snapshot)
         copy_public_artifacts(staging, snapshot)
+        asset_aliases = capture_public_asset_aliases(snapshot, staging, expected)
         gate.need(gate.inventory(snapshot, build_inputs=True) == expected, "a build step changed frozen canonical inputs")
-        gate.assert_publishable(snapshot)
+        require_unchanged(expected)
+        sync_generated(snapshot)
+        require_unchanged(expected)
+        # Originals never enter the snapshot. Re-read both the current notes and
+        # historical manifest while the build lock is held, immediately before
+        # writing the new manifest and promoting the complete release.
+        originals = gate.recheck_private_pins(WIKI_ROOT)
         gate.write_json(staging / "release-manifest.json", {
             "version": 1, "built_at": gate.now(), "input_manifest_sha256": gate.sha(gate.canonical(expected)),
+            "input_inventory": expected, "public_asset_aliases": asset_aliases,
+            "original_source_hashes": originals,
             "legacy_unreviewed_files": admission["legacy_files"], "reviewed_files": admission["reviewed_files"],
             "hash_policy": gate.HASH_POLICY,
         })
         require_unchanged(expected)
-        sync_generated(snapshot)
-        require_unchanged(expected)
+        gate.need(gate.recheck_private_pins(WIKI_ROOT) == originals, "private originals changed before promotion")
         promote(staging)
 
 

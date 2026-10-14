@@ -53,33 +53,23 @@ From `/home/hermes/wiki`:
 npm run build
 ```
 
-This is the universal production build entrypoint. It takes the shared
-`/home/hermes/.hermes/wiki-build.lock`, checks the accuracy gate, freezes sources,
-receipts and configuration in Hermes scratch, and builds only that snapshot.
-Chronology and review admission are mandatory. Immediately before publication it
-rejects live-input drift, then atomically exchanges the complete `dist/` directory
-using Linux `renameat2(RENAME_EXCHANGE)`. Do not invoke `vitepress build` directly
-for production/manual builds; the autobuild hook uses this same gate.
+This is the production entrypoint. It takes the shared wiki build lock,
+checks historical raw immutability and any new private-original pins, freezes
+canonical inputs into a scratch snapshot, validates index/links/semantic
+relationships, renders VitePress, checks source/input drift, and atomically
+promotes the complete `dist/` directory. A pre-promotion failure leaves the
+previous site intact. After promotion, a durability/cleanup problem reports a
+published-with-warning exit (2). Do not invoke `vitepress build` directly for
+production/manual releases; the autobuild hook uses the same entrypoint.
 
-The build script runs, in order:
+New source originals and native extractions live under `.private-sources/`, outside
+the snapshot and served site. New public `src/raw/` pages are concise source
+metadata/locators with source-date status and private-original hash pins; source
+claims are checked against the original before the build. Historical v2 receipts
+remain available, but per-claim sealing and independent review are not required
+for routine ingestion. See `INGESTION.md`.
 
-1. Validates `_tools/ingestion_gate.py` admission and creates an independent source snapshot.
-2. Runs snapshot-local chronology audit; copies KaTeX CSS/fonts in the snapshot.
-3. Generates sidebar, validates links, generates graph and validates semantic relationships.
-4. Runs snapshot-local `wiki_ops.py validate`, including the accuracy gate.
-5. Runs VitePress and copies all evidence/public assets from the snapshot only.
-6. Rechecks frozen and live input fingerprints and review admission.
-7. Writes `release-manifest.json`, synchronizes only derived caches, and atomically switches `dist/`.
-
-The baseline and independent-review records stay outside published `src/` under
-`_meta/ingestion/`; drafts stay in `.ingest-work/`. Follow `INGESTION.md` for
-claim/source records, exact hash boundaries, review reports, apply and recovery.
-PDF/image preparation uses the local lazy PyMuPDF/Pillow helper
-`_tools/visual_evidence.py`; all-page/frame manifests and independent pixel-review
-coverage are admission requirements, not optional extraction QA. `npm run test:ingestion`
-exercises gate, render/crop, full visual integration and build
-failure cases in scratch. After an atomic release switch, durability/cleanup
-problems report published-with-warning (exit 2), distinct from pre-switch refusal.
+`npm run test:ingestion` exercises the current source-to-release path and build safety; use focused tests for implementation changes, not as an ingest prerequisite.
 
 The generated sidebar is rebuilt from the actual `src/` tree. Do not manually edit `.vitepress/_sidebar-generated.mjs`.
 

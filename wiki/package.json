@@ -16,7 +16,7 @@
     "validate-links": "node .vitepress/validate-wiki-links.mjs",
     "lint": "python3 -B _tools/wiki_ops.py validate && node .vitepress/gen-sidebar.mjs && node .vitepress/validate-wiki-links.mjs && node .vitepress/gen-semantic-graph.mjs && node .vitepress/validate-semantic-relationships.mjs && python3 _tools/wiki_ops.py opportunities",
     "ingestion-check": "python3 -B _tools/ingestion_gate.py check",
-    "test:ingestion": "PYTHONPATH=_tools uv run --offline --with pytest python -B -m pytest _tools/test_ingestion_gate.py _tools/test_wiki_build.py _tools/test_visual_evidence.py _tools/test_visual_ingestion_gate.py -q -p no:cacheprovider",
+    "test:ingestion": "PYTHONPATH=_tools uv run --offline --with pytest python -B -m pytest _tools/test_wiki_build.py _tools/test_routine_replacement.py -q -p no:cacheprovider",
     "deploy-check": "python3 _tools/wiki_ops.py deploy-check",
     "opportunities": "python3 _tools/wiki_ops.py opportunities",
     "query-review": "python3 _tools/wiki_ops.py query-review",

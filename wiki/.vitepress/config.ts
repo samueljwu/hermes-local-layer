@@ -8,6 +8,8 @@ export default defineConfig({
   title: 'Hermes',
   srcDir: 'src',
   outDir: 'dist',
+  // Native compiler provenance is filtered into release-manifest.json before promotion.
+  vite: { build: { manifest: true } },
   base: '/wiki/',
   router: {
     prefetchLinks: false,
