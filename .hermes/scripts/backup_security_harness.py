@@ -49,6 +49,7 @@ DURABLE_STATIC_ALLOWED_SUFFIXES = {
 BLOCKED_PATH_RE = re.compile(
     r"(^|/)("
     r"projects/|"
+    r"^docs(?:/|$)|^snap(?:/|$)|"
     r"\.hermes/plugins/homeassistant(?:/|$)|"
     r"^\.hermes/skills/\.hub(?:/|$)|"
     r"notion-integration-review/|"

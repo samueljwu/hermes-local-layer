@@ -49,6 +49,27 @@ class BackupDocumentationGuardTests(unittest.TestCase):
             finally:
                 setattr(guard, "REPO", old_repo)
 
+    def test_local_planning_and_snap_roots_remain_excluded(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "docs").mkdir()
+            (repo / "snap").mkdir()
+            (repo / "unknown-system").mkdir()
+            with mock.patch.object(guard, "REPO", repo):
+                self.assertEqual(guard.unknown_top_level_directories(), ["unknown-system"])
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / ".gitignore").write_text(Path("/home/hermes/.gitignore").read_text())
+            for path in ["docs/plans/example.md", "snap/glow/config.yml"]:
+                result = subprocess.run(["git", "check-ignore", "-q", path], cwd=repo)
+                self.assertEqual(result.returncode, 0)
+        spec = importlib.util.spec_from_file_location("backup_security_tested", SCRIPT.with_name("backup_security_harness.py"))
+        assert spec is not None and spec.loader is not None
+        security = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(security)
+        for path in ["docs/plans/example.md", "snap/glow/config.yml"]:
+            self.assertIsNotNone(security.BLOCKED_PATH_RE.search(path))
+
     def test_pdf_audit_extract_file_is_generated_scratch(self):
         guard = load_guard()
         self.assertTrue(guard.is_generated("pdf_audit_extract.json"))
