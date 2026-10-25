@@ -207,6 +207,13 @@ with locking.stock_screener_lock():
                 self.assertIn("run_locked(main)", text)
         self.assertIn("stock_screener.locking", (SCRIPTS / "weekly_update.sh").read_text(encoding="utf-8"))
 
+    def test_weekly_deploy_check_uses_python_without_wiki_bytecode_writes(self):
+        text = (SCRIPTS / "weekly_update.sh").read_text(encoding="utf-8")
+        self.assertIn('PYTHONDONTWRITEBYTECODE=1 python3 /home/hermes/wiki/_tools/wiki_ops.py deploy-check >"$wiki_check_output"', text)
+        self.assertIn('wiki_check_output="$(mktemp)"', text)
+        self.assertIn('"$wiki_check_output"', text.split('cleanup_wiki_state() {', 1)[1].split('}', 1)[0])
+        self.assertNotIn('/tmp/stock_screener_wiki_deploy_check.json', text)
+
     def test_cron_wrapper_captures_before_descriptor_bound_log_publication(self):
         text = Path("/home/hermes/.hermes/scripts/stock_screener_weekly_update.sh").read_text(encoding="utf-8")
         self.assertLess(text.index("python3 -m stock_screener.locking"), text.index("atomic_write_bytes"))

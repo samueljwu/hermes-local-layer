@@ -20,8 +20,9 @@ echo "Stock screener weekly update started: ${started_utc}"
 # unrelated dirty files: the before/after snapshots must match byte-for-byte.
 wiki_state_before="$(mktemp)"
 wiki_state_after="$(mktemp)"
+wiki_check_output="$(mktemp)"
 cleanup_wiki_state() {
-  rm -f "$wiki_state_before" "$wiki_state_after"
+  rm -f "$wiki_state_before" "$wiki_state_after" "$wiki_check_output"
 }
 trap cleanup_wiki_state EXIT
 # Snapshot protected wiki content (including ignored generated artifacts) before
@@ -81,7 +82,7 @@ print('Excluded review: https://hermes.tail5857b7.ts.net/stocks/excluded.html')
 PY
 
 cd /home/hermes/wiki
-/home/hermes/wiki/_tools/wiki_ops.py deploy-check >/tmp/stock_screener_wiki_deploy_check.json
+PYTHONDONTWRITEBYTECODE=1 python3 /home/hermes/wiki/_tools/wiki_ops.py deploy-check >"$wiki_check_output"
 python3 /home/hermes/stock-screener/scripts/wiki_readonly_manifest.py >"$wiki_state_after"
 if ! cmp -s "$wiki_state_before" "$wiki_state_after"; then
   echo "ERROR: stock screener workflow changed protected wiki content; wiki access must remain read-only" >&2
