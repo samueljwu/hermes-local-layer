@@ -39,6 +39,8 @@ If a user wants a recommendation ingested into wiki, captured in journal, or con
 
 `collect_signals` reads the last 35 records in canonical `/home/hermes/tasks/_meta/task_registry.json` order using `name`, strict boolean `done`, `project_id`, and `notes`. It joins `project_id` to the canonical project catalog for display and includes both pending (`done=false`) and completed (`done=true`) retained records without filtering to open work; archived cancellations are not active registry inputs. The registry signal weight remains 0.45. Done/Pending labels and their tokenizer fragments are operational noise, not interest topics. Historical task-log signals retain their existing text and weight.
 
+RSS parsing accepts unnamespaced RSS 2 items, RSS 1.0 namespace items, and Atom entries without changing source approval or network boundaries.
+
 ## Source Universe
 
 The live source universe is `_meta/information_sources.json`. It is the only canonical source list. Runtime fetches must honor each row's `enabled` and `connector` values. The configured `endpoint` is authoritative for arXiv, PubMed, Hacker News, and generic RSS connectors; bounded site-specific connectors retain their audited source URL internally. `sources lint` and `sources validate` dynamically report every configured row. Validation fetches each enabled source once, applies structural and semantic usefulness checks to that sample, and exits nonzero if either gate fails; disabled rows are skipped without network access. It requests five items even when the requested `--limit` is lower and requires at least two returned records.
