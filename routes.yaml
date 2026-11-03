@@ -12,6 +12,12 @@ routes:
     owner: "feed"
     kind: "generated_static_artifact"
     notes: "Rendered by /home/hermes/feed/_tools/render_feed_page.py from feed-local recommendation history. Served by the root homepage mapping."
+  "/newsletter/":
+    path: "/home/hermes/homepage/dist/newsletter"
+    owner: "newsletter"
+    kind: "generated_static_artifact"
+    notes: "Rendered by /home/hermes/newsletter/newsletter.py from archived RSS-grounded editions. Served by the root homepage mapping."
+
   "/wiki/":
     path: "/home/hermes/wiki/dist"
     owner: "wiki"

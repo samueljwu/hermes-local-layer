@@ -8,6 +8,7 @@
           <a class="active" href="/wiki/">Wiki</a>
           <a href="/stocks/" target="_self">Stocks</a>
           <a href="/feed/" target="_self">Feed</a>
+          <a href="/newsletter/" target="_self">Newsletter</a>
         </nav>
       </div>
     </div>
