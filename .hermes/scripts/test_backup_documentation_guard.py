@@ -58,9 +58,12 @@ class BackupDocumentationGuardTests(unittest.TestCase):
                 self.assertEqual(guard.unknown_top_level_directories(), [])
         for path in ("newsletter/issues/daily-2026-11-03.json",
                      "newsletter/editorial/daily-2026-11-03.json",
-                     "newsletter/receipts/daily-2026-11-03.json"):
+                     "newsletter/receipts/daily-2026-11-03.json",
+                     "newsletter/editorial_feedback.json"):
             self.assertFalse(guard.is_trigger(path))
         self.assertTrue(guard.is_trigger("newsletter/newsletter.py"))
+        self.assertTrue(guard.is_trigger("newsletter/weekly_briefing.py"))
+        self.assertTrue(guard.is_trigger("newsletter/editorial_feedback_schema.json"))
         self.assertTrue(guard.is_trigger("newsletter/site_extractors.py"))
 
     def test_local_planning_and_snap_roots_remain_excluded(self):
@@ -190,6 +193,22 @@ class BackupDocumentationGuardTests(unittest.TestCase):
                 self.assertFalse(guard.is_trigger(guard.CRON_JOBS_PATH))
             finally:
                 setattr(guard, "REPO", old_repo)
+
+    def test_one_shot_completion_and_claim_receipts_are_runtime_state(self):
+        guard = load_guard()
+        before = {"jobs": [{"id": "once", "enabled": True, "state": "scheduled",
+                            "script": "once.py", "repeat": {"times": 1, "completed": 0}}]}
+        after = {"jobs": [{"id": "once", "enabled": False, "state": "completed",
+                           "script": "once.py", "repeat": {"times": 1, "completed": 1},
+                           "run_claim": None, "fire_claim": None,
+                           "canonical_completions": ["receipt-id"]}]}
+        temporary, repo = self._cron_repo(before, after)
+        with temporary, mock.patch.object(guard, "REPO", repo):
+            self.assertFalse(guard.cron_jobs_behavior_changed())
+        after["jobs"][0]["state"] = "paused"
+        temporary, repo = self._cron_repo(before, after)
+        with temporary, mock.patch.object(guard, "REPO", repo):
+            self.assertTrue(guard.cron_jobs_behavior_changed())
 
     def test_cron_behavior_change_triggers_docs(self):
         guard = load_guard()
