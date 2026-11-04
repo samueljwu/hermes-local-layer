@@ -26,6 +26,7 @@ This repository is an automatically generated **filtered public mirror**, not th
 │ Feed      recommendations using journal/wiki/task signals    │
 │ Scout     read-only GitHub project discovery                 │
 │ Stocks    market-data screens, charts, and review pages      │
+│ Newsletter separate scheduled digest and static archive      │
 │ Homepage  navigation plus generated presentation pages      │
 └──────────────────────────────┬───────────────────────────────┘
                                │
@@ -60,6 +61,7 @@ The full local environment uses compact interfaces such as `journal_ops`, `task_
 | Tasks | Manage commitments, due dates, recurrence, status, and completion history. | The registry owns task state; notes, reminders, dashboards, and reports are downstream views. |
 | Wiki | Maintain a sourced knowledge base and graph. | Ingestion follows user-provided sources only. Generated site output is not edited as source. |
 | Feed | Discover and rank reading from a source registry and local signals. | May read wiki, journal, and tasks as context; writes only feed-local state and its generated page. |
+| Newsletter | Produce a separate source-linked briefing and archive. | Its own editorial and delivery state; a one-way, read-only source-registry metadata bridge from Feed, without Feed recommendations or history. |
 | Repo Scout | Discover and rank GitHub projects. | Discovery is list-only/read-only toward GitHub and does not write into the knowledge systems. |
 | Stock Screener | Maintain market-data inputs and generate screening/review output. | Separate data and output roots; private scanning rules and calibration are outside the public showcase. |
 | Homepage | Hold static presentation artifacts. | An artifact container, not another canonical subsystem. |
@@ -79,6 +81,7 @@ The mirror is deliberately uneven: a directory can contain useful tests or docum
 | [Journal](journal/) | Workflow documentation, selected harness/boundary tests, and structural index/log pages. | No personal entries, canonical registry, or mutation harness. |
 | [Tasks](tasks/) | Workflow documentation and structural index/log pages; related consumer/report code lives under operating scripts. | No personal task registry, task notes, or task mutation harness. |
 | [Feed](feed/) | Schema, selected tests for source handling, feedback, fetch boundaries, locking, read-only validation, and page-output safety; structural index/log pages. | No personal source registry, recommendation history, or feed harness. |
+| [Newsletter](newsletter/) | Public-specific architecture note only. | No publisher/source lists or URLs, issue/editorial snapshots, receipts, production code, tests, schedules, or generated archive. |
 | [Repo Scout](repo-scout/) | Python package source, schema, tests, package metadata, and smoke configuration. | Not the live personalized configuration or discovery output. |
 | [Stock Screener](stock-screener/) | Selected data-refresh and validation scripts, supporting configuration, package metadata, and safety tests. | Not a complete screener: private scanning implementation, rules, calibration, and live screening output are outside the showcase. |
 | Root documentation | [Route manifest](routes.yaml), [deployment contract](DEPLOYMENT.md), and [review protocol](REVIEW_PROTOCOL.md). | These describe the local system; they do not provision a deployment. |
@@ -157,6 +160,7 @@ The mirror uses file selection and content checks to separate reusable operating
 Outside the public scope:
 
 - Personal wiki content, journal entries, task records, feed interests, recommendation history, and personal operational logs.
+- Newsletter editions, editorial records, delivery receipts, source identities and URLs, and implementation/configuration; only its generic architecture note is included.
 - Secrets, live authentication, API keys, OAuth material, cookies, private keys, and account-specific configuration.
 - Sessions, runtime databases, checkpoints, caches, process state, lock files, and job output.
 - Private scanner rules, calibration, and implementation that reveals them.

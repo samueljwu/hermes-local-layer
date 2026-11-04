@@ -34,7 +34,10 @@ wiki/.vitepress/.hermes-tmp.*
 !newsletter/
 !newsletter/**
 newsletter/.publish.lock
+newsletter/.lock
 newsletter/**/__pycache__/
+newsletter/**/*.pyc
+newsletter/.env*
 !repo-scout/
 !repo-scout/**
 !stock-screener/

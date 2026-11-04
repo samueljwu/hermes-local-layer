@@ -49,6 +49,20 @@ class BackupDocumentationGuardTests(unittest.TestCase):
             finally:
                 setattr(guard, "REPO", old_repo)
 
+    def test_newsletter_is_separate_backup_root_with_immutable_edition_state(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "newsletter").mkdir()
+            with mock.patch.object(guard, "REPO", repo):
+                self.assertEqual(guard.unknown_top_level_directories(), [])
+        for path in ("newsletter/issues/daily-2026-11-03.json",
+                     "newsletter/editorial/daily-2026-11-03.json",
+                     "newsletter/receipts/daily-2026-11-03.json"):
+            self.assertFalse(guard.is_trigger(path))
+        self.assertTrue(guard.is_trigger("newsletter/newsletter.py"))
+        self.assertTrue(guard.is_trigger("newsletter/site_extractors.py"))
+
     def test_local_planning_and_snap_roots_remain_excluded(self):
         guard = load_guard()
         with tempfile.TemporaryDirectory() as td:
