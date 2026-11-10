@@ -123,6 +123,8 @@ ALLOW_SECRET_VALUE_PREFIXES: dict[str, tuple[tuple[str, str], ...]] = {
         # output/source copies with the same public company/source slugs.
         ("hermes_cleanup_manifests/", "sk-hynix-"),
         ("feed/_meta/candidates.json", "sk-telecom-"),
+        # Newsletter issue URLs can repeat the same public SK Telecom slug.
+        ("newsletter/issues/", "sk-telecom-"),
     ),
 }
 

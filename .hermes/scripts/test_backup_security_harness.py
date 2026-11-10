@@ -53,6 +53,28 @@ class BackupSecurityHarnessTests(unittest.TestCase):
         self.assertTrue(harness.path_is_blocked('hermes_cleanup_manifests/old/.env'))
         self.assertTrue(harness.path_is_blocked('.hermes/skills/.archive/old/auth.json'))
 
+    def test_newsletter_sk_telecom_url_exemption_remains_narrow(self):
+        harness = load_harness()
+        path = 'newsletter/issues/daily-2026-11-09.json'
+        slug = 'sk-' + 'telecom-public-news-title-with-many-words-and-no-secret'
+        key = 'sk-' + 'A' * 40
+        self.assertTrue(harness.allowed_secret_value_false_positive(path, 'openai_key', slug))
+        self.assertFalse(harness.allowed_secret_value_false_positive(path, 'openai_key', key))
+        self.assertFalse(harness.allowed_secret_value_false_positive('newsletter/editorial/daily.json', 'openai_key', slug))
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            issue = repo / path
+            issue.parent.mkdir(parents=True)
+            issue.write_text('https://example.org/' + slug + '\n' + key, encoding='utf-8')
+            old_repo = harness.REPO
+            try:
+                setattr(harness, 'REPO', repo)
+                self.assertEqual(harness.scan_content([path]), [path + ': content rule openai_key'])
+                issue.write_text('https://example.org/' + slug, encoding='utf-8')
+                self.assertEqual(harness.scan_content([path]), [])
+            finally:
+                setattr(harness, 'REPO', old_repo)
+
     def test_blocks_generated_wiki_tmp_tree(self):
         harness = load_harness()
         self.assertTrue(harness.path_is_blocked('wiki/.tmp/extracted.txt'))
