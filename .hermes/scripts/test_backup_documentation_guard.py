@@ -49,6 +49,25 @@ class BackupDocumentationGuardTests(unittest.TestCase):
             finally:
                 setattr(guard, "REPO", old_repo)
 
+    def test_downloads_are_excluded_without_allowing_similar_new_roots(self):
+        guard = load_guard()
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / ".gitignore").write_text(Path("/home/hermes/.gitignore").read_text(), encoding="utf-8")
+            (repo / "Downloads").mkdir()
+            (repo / "Downloads" / "unfiled.pdf").write_bytes(b"local download")
+            (repo / "Downloads-other").mkdir()
+            with mock.patch.object(guard, "REPO", repo):
+                self.assertEqual(guard.unknown_top_level_directories(), ["Downloads-other"])
+            self.assertEqual(subprocess.run(["git", "check-ignore", "-q", "Downloads/unfiled.pdf"], cwd=repo).returncode, 0)
+            spec = importlib.util.spec_from_file_location("backup_security_tested", SCRIPT.with_name("backup_security_harness.py"))
+            assert spec is not None and spec.loader is not None
+            security = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(security)
+            self.assertIsNotNone(security.BLOCKED_PATH_RE.search("Downloads/unfiled.pdf"))
+            self.assertIsNone(security.BLOCKED_PATH_RE.search("Downloads-other/unfiled.pdf"))
+
     def test_newsletter_is_separate_backup_root_with_immutable_edition_state(self):
         guard = load_guard()
         with tempfile.TemporaryDirectory() as td:

@@ -163,6 +163,32 @@ class WeeklyTaskCompletionReportTests(unittest.TestCase):
                                    "tag": "Recurring", "notes": "Canonical recurring notes",
                                    "est_time": 1}])
 
+    def test_occurrence_estimate_override_applies_to_exact_occurrence_only(self):
+        registry = [{"id": "T-1-309", "name": "Roadmap", "done": False,
+                     "project_id": "P-1", "notes": "", "est_time": 1.5,
+                     "due_date": None, "reminder": None, "recurrence": "daily", "priority": "medium"}]
+        log = ("## 2026-11-11\n- **T-1-309** — Roadmap — completed occurrence\n"
+               "## 2026-11-12\n- **T-1-309** — Roadmap — completed occurrence — est_time: 0.25\n"
+               "## 2026-11-13\n- **T-1-309** — Roadmap — completed occurrence\n"
+               "## 2026-11-14\n- **T-1-309** — occurrence estimate correction — 2026-11-11 — est_time: 0.75\n"
+               "## 2026-11-15\n- **T-1-309** — occurrence estimate correction — 2026-11-11 — est_time: 0.5\n")
+        rows = report.build_completion_records(
+            log, registry, date(2026, 11, 11), date(2026, 11, 15),
+            projects=[{"id": "P-1", "name": "Admin"}])
+        self.assertEqual([row["est_time"] for row in rows], [0.5, 0.25, 1.5])
+
+    def test_occurrence_estimate_with_reason_is_included_in_weekly_report(self):
+        registry = [{"id": "T-1-309", "name": "Roadmap", "done": False,
+                     "project_id": "P-1", "notes": "", "est_time": 1.5,
+                     "due_date": None, "reminder": None, "recurrence": "daily", "priority": "medium"}]
+        log = ("## 2026-11-11\n"
+               "- **T-1-309** — Roadmap — completed occurrence — est_time: 0.5: reason note\n")
+        rows = report.build_completion_records(
+            log, registry, date(2026, 11, 11), date(2026, 11, 11),
+            projects=[{"id": "P-1", "name": "Admin"}])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["est_time"], 0.5)
+
     def test_rank_changes_and_legacy_ids_do_not_duplicate_completion(self):
         log = ("## 2026-10-11\n"
                "- **T-1-264** — Paper — completed\n"

@@ -310,7 +310,7 @@ def parse_completed_log(text: str, start: date, end: date) -> list[dict]:
     date_re = re.compile(r"^## (\d{4}-\d{2}-\d{2})$")
     entry_re = re.compile(
         r"^- \*\*(?P<id>[^*]+)\*\* — (?P<task>.*?) — "
-        r"(?P<status>completed(?: occurrence)?)$"
+        r"(?P<status>completed(?: occurrence)?)(?: — est_time: (?P<est_time>\S+))?(?:: .*)?$"
     )
     for raw in text.splitlines():
         line = raw.strip()
@@ -320,12 +320,15 @@ def parse_completed_log(text: str, start: date, end: date) -> list[dict]:
             continue
         em = entry_re.match(line)
         if em and active_date and active_date <= end:
-            records.append({
+            record = {
                 "date": active_date,
                 "id": em.group("id"),
                 "task": em.group("task"),
                 "status": em.group("status"),
-            })
+            }
+            if em.group("est_time") is not None:
+                record["occurrence_est_time"] = _parse_estimate(em.group("est_time"))
+            records.append(record)
     # Ordinary tasks are work items, not checkbox transitions. Use the permanent
     # creation suffix, never the mutable due-rank or title. Select the earliest
     # completion across the full history BEFORE filtering the report window so
@@ -343,6 +346,35 @@ def parse_completed_log(text: str, start: date, end: date) -> list[dict]:
         and (record["status"] == "completed occurrence"
              or first_completion[creation_number(record["id"])] == (record["date"], index))
     ]
+
+
+def _parse_estimate(raw: str) -> float:
+    from task_schema import validate_est_time
+    try:
+        value = float(raw)
+        validate_est_time(value)
+    except (ValueError, OverflowError) as exc:
+        raise RuntimeError(f"Invalid occurrence estimate in task log: {raw!r}") from exc
+    return value
+
+
+def parse_occurrence_estimate_corrections(text: str) -> dict[tuple[int, date], float]:
+    """Return the latest correction in log order for each exact occurrence key."""
+    correction_re = re.compile(
+        r"^- \*\*(?P<id>[^*]+)\*\* — occurrence estimate correction — "
+        r"(?P<date>\d{4}-\d{2}-\d{2}) — est_time: (?P<value>\S+)$"
+    )
+    latest: dict[tuple[int, date], float] = {}
+    for raw in text.splitlines():
+        match = correction_re.fullmatch(raw.strip())
+        if not match:
+            continue
+        try:
+            key = (creation_number(match.group("id")), date.fromisoformat(match.group("date")))
+        except ValueError as exc:
+            raise RuntimeError("Invalid occurrence estimate correction identity/date") from exc
+        latest[key] = _parse_estimate(match.group("value"))
+    return latest
 
 
 def build_completion_records(
@@ -405,13 +437,21 @@ def build_completion_records(
             "est_time": snapshot.get("est_time"),
         }
     records = parse_completed_log(log_text, start, end)
+    corrections = parse_occurrence_estimate_corrections(log_text)
     for record in records:
-        source = by_creation.get(creation_number(record["id"]))
+        suffix = creation_number(record["id"])
+        source = by_creation.get(suffix)
         if source is None:
             raise RuntimeError(f"No canonical registry record for {record['id']}")
         record["tag"] = source["project_name"]
         record["notes"] = source.get("notes", "")
-        record["est_time"] = 1 if source.get("est_time") is None else source["est_time"]
+        key = (suffix, record["date"])
+        if key in corrections:
+            record["est_time"] = corrections[key]
+        elif "occurrence_est_time" in record:
+            record["est_time"] = record.pop("occurrence_est_time")
+        else:
+            record["est_time"] = 1 if source.get("est_time") is None else source["est_time"]
     return records
 
 
